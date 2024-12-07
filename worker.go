@@ -20,9 +20,9 @@ type Task[In any, Out any] interface {
 // taskFunc is a function type that implements the Task interface.
 type taskFunc[In any, Out any] func(context.Context, In) (Out, error)
 
-// TaskFunc provides a convenient way to create a [Task] from a simple function that matches
+// NewTask provides a convenient way to create a [Task] from a simple function that matches
 // the required signature.
-func TaskFunc[In any, Out any](f func(context.Context, In) (Out, error)) Task[In, Out] {
+func NewTask[In any, Out any](f func(context.Context, In) (Out, error)) Task[In, Out] {
 	return taskFunc[In, Out](f)
 }
 
