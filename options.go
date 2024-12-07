@@ -26,16 +26,16 @@ type RetryOptions struct {
 
 // WithRetryMaxAttempts configures the maximum number of retry attempts for failed tasks.
 // A value of 0 means no retries will be attempted.
-func WithRetryMaxAttempts(n int) func(*RetryOptions) {
-	return func(o *RetryOptions) {
+func WithRetryMaxAttempts(n int) func(*Options) {
+	return func(o *Options) {
 		o.maxAttempts = n
 	}
 }
 
 // WithBackoff configures the backoff strategy used between retry attempts.
 // The provided RetryBackoff implementation determines the delay between retries.
-func WithBackoff(b RetryBackoff) func(*RetryOptions) {
-	return func(o *RetryOptions) {
+func WithBackoff(b RetryBackoff) func(*Options) {
+	return func(o *Options) {
 		o.retryBackoff = b
 	}
 }
@@ -50,7 +50,7 @@ func (b constantBackoff) NextRetry(time.Duration) time.Duration {
 
 // WithRetryEvery configures a constant backoff strategy with the specified duration.
 // Each retry attempt will wait for exactly the same duration.
-func WithRetryEvery(d time.Duration) func(*RetryOptions) {
+func WithRetryEvery(d time.Duration) func(*Options) {
 	return WithBackoff(constantBackoff(d))
 }
 
@@ -62,7 +62,7 @@ type exponentialBackoff struct {
 
 // WithRetryExponentially configures an exponential backoff strategy.
 // The delay between retries starts at 'start' and doubles until reaching 'max'.
-func WithRetryExponentially(start, max time.Duration) func(*RetryOptions) {
+func WithRetryExponentially(start, max time.Duration) func(*Options) {
 	return WithBackoff(exponentialBackoff{
 		startDuration: start,
 		maxDuration:   max,

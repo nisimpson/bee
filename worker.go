@@ -120,10 +120,7 @@ type Pool[In any, Out any] struct {
 // The pool will use the provided worker to process tasks concurrently.
 func newPool[In any, Out any](w Worker[In, Out], opts ...func(*Options)) *Pool[In, Out] {
 	options := Options{
-		PoolOptions: PoolOptions{
-			maxWorkers:     1,
-			delayAfterWork: 0,
-		}}
+		PoolOptions: PoolOptions{}}
 
 	options.apply(opts...)
 	return &Pool[In, Out]{
@@ -159,6 +156,7 @@ func (p Pool[In, Out]) execute(ctx context.Context, in []In) ([]Out, error) {
 	for i := 0; i < p.options.maxWorkers; i++ {
 		wg.Add(1)
 		go func(workerID int, wg *sync.WaitGroup) {
+			defer wg.Done()
 			p.start(
 				ctx,
 				workerID,
