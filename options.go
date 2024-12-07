@@ -4,61 +4,103 @@ import (
 	"time"
 )
 
+// Options combine retry and pool configuration options for a worker.
 type Options struct {
-	RetryOptions
-	PoolOptions
+	RetryOptions // RetryOptions configures the retry behavior for failed tasks
+	PoolOptions  // PoolOptions configures the worker pool behavior
 }
 
+// apply configures the Options struct using the provided option functions.
+// Each function can modify one or more fields of the Options struct.
 func (o *Options) apply(opts ...func(*Options)) {
 	for _, opt := range opts {
 		opt(o)
 	}
 }
 
-// RetryOptions modify and configure [RetryWorker] instances.
+// RetryOptions configures how tasks are retried when they fail.
 type RetryOptions struct {
-	maxAttempts  int
-	retryBackoff RetryBackoff
+	maxAttempts  int          // maxAttempts is the maximum number of times to retry a failed task
+	retryBackoff RetryBackoff // retryBackoff determines the delay between retry attempts
 }
 
-func WithRetryMaxAttempts(n int) func(*Options) {
-	return func(o *Options) {
+// WithRetryMaxAttempts configures the maximum number of retry attempts for failed tasks.
+// A value of 0 means no retries will be attempted.
+func WithRetryMaxAttempts(n int) func(*RetryOptions) {
+	return func(o *RetryOptions) {
 		o.maxAttempts = n
 	}
 }
 
-func WithBackoff(b RetryBackoff) func(*Options) {
-	return func(o *Options) {
+// WithBackoff configures the backoff strategy used between retry attempts.
+// The provided RetryBackoff implementation determines the delay between retries.
+func WithBackoff(b RetryBackoff) func(*RetryOptions) {
+	return func(o *RetryOptions) {
 		o.retryBackoff = b
 	}
 }
 
+// constantBackoff implements RetryBackoff with a fixed delay between retries.
 type constantBackoff time.Duration
 
+// NextRetry returns a constant duration regardless of the previous retry delay.
 func (b constantBackoff) NextRetry(time.Duration) time.Duration {
 	return time.Duration(b)
 }
 
-func WithRetryEvery(d time.Duration) func(*Options) {
+// WithRetryEvery configures a constant backoff strategy with the specified duration.
+// Each retry attempt will wait for exactly the same duration.
+func WithRetryEvery(d time.Duration) func(*RetryOptions) {
 	return WithBackoff(constantBackoff(d))
 }
 
+// exponentialBackoff implements [RetryBackoff] with exponentially increasing delays.
 type exponentialBackoff struct {
-	startDuration time.Duration
-	maxDuration   time.Duration
+	startDuration time.Duration // startDuration is the initial delay duration
+	maxDuration   time.Duration // maxDuration is the maximum delay duration
 }
 
-func WithRetryExponentially(start, max time.Duration) func(*Options) {
+// WithRetryExponentially configures an exponential backoff strategy.
+// The delay between retries starts at 'start' and doubles until reaching 'max'.
+func WithRetryExponentially(start, max time.Duration) func(*RetryOptions) {
 	return WithBackoff(exponentialBackoff{
 		startDuration: start,
 		maxDuration:   max,
 	})
 }
 
+// NextRetry implements [RetryBackoff] by doubling the previous retry duration.
+// The returned duration will not exceed the configured maximum duration.
 func (b exponentialBackoff) NextRetry(d time.Duration) time.Duration {
 	d = max(d, b.startDuration)
 	if d < b.maxDuration {
 		d = min(d*2, b.maxDuration)
 	}
 	return d
+}
+
+// PoolOptions configures the behavior of a worker pool. Configuring the
+// maximum number of workers with a defined execution delay determines
+// the overall throughput of a [Pool]. For example:
+//
+//	5 workers * 1s delay = 5 executions per second
+type PoolOptions struct {
+	maxWorkers     int           // maxWorkers is the maximum number of concurrent workers in the pool
+	delayAfterWork time.Duration // delayAfterWork is the duration to wait after completing a task
+}
+
+// WithPoolMaxWorkers configures the maximum number of concurrent workers in a pool.
+// This controls the level of parallelism when processing tasks.
+func WithPoolMaxWorkers(n int) func(*Options) {
+	return func(o *Options) {
+		o.maxWorkers = n
+	}
+}
+
+// WithPoolWorkerDelay configures the delay between task executions for each worker.
+// This can help prevent overwhelming systems when processing many tasks.
+func WithPoolWorkerDelay(d time.Duration) func(*Options) {
+	return func(o *Options) {
+		o.delayAfterWork = d
+	}
 }
