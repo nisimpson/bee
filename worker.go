@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Task represents a unit of work that can be executed by a Worker.
+// Task represents a unit of work that can be executed by a [Worker].
 // The generic parameters In and Out represent the input and output types of the task.
 type Task[In any, Out any] interface {
 	// Do is invoked by a [Worker] and should return an output or error if the task fails.
@@ -31,14 +31,13 @@ func (f taskFunc[In, Out]) Do(ctx context.Context, in In) (Out, error) {
 	return f(ctx, in)
 }
 
-// Worker represents an entity capable of executing tasks with specific input and output types.
+// Worker represents an entity capable of executing a [Task] with specific input and output types.
 type Worker[In any, Out any] interface {
 	// execute processes the input and returns either the output or an error.
 	execute(ctx context.Context, in In) (Out, error)
 }
 
 // Start executes the worker with the provided input.
-// It's a convenience function that executes a [Worker] without requiring explicit worker ID.
 func Start[In any, Out any](ctx context.Context, w Worker[In, Out], in In) (Out, error) {
 	return StartWithID(ctx, w, strconv.Itoa(rand.Int()), in)
 }
