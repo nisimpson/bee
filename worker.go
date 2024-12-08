@@ -86,8 +86,8 @@ func (w RetryWorker[In, Out]) execute(ctx context.Context, in In) (Out, error) {
 	var (
 		out     Out
 		err     error
-		backoff RetryBackoff  = w.options.retryBackoff
-		delay   time.Duration = backoff.NextRetry(0)
+		backoff = w.options.retryBackoff
+		delay   = backoff.NextRetry(0)
 	)
 
 	for i := 0; i < w.options.maxAttempts; i++ {
