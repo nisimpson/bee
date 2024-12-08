@@ -1,5 +1,9 @@
 # bee
 
+[![Test](https://github.com/nisimpson/bee/actions/workflows/test.yml/badge.svg)](https://github.com/nisimpson/bee/actions/workflows/test.yml)
+[![GoDoc](https://godoc.org/github.com/nisimpson/bee?status.svg)](http://godoc.org/github.com/nisimpson/bee)
+[![Release](https://img.shields.io/github/release/nisimpson/bee.svg)](https://github.com/nisimpson/bee/releases)
+
 A Go package that provides a flexible and type-safe worker pool implementation with retry capabilities. The package allows you to create workers that can process tasks concurrently, with configurable retry behavior and pool size management.
 
 ## Installation
