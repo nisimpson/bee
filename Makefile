@@ -34,7 +34,7 @@ audit:
 
 ## audit-ci: run quality control checks
 .PHONY: audit-ci
-audit:
+audit-ci:
 	go mod verify
 	go vet ./...
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
