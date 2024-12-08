@@ -1,3 +1,5 @@
+# Makefile for bee
+
 pkg?=bee
 
 .PHONY: test
