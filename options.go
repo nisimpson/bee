@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// Options combine retry and pool configuration options for a worker.
+// Options combine retry and pool configuration options for a [Worker].
 type Options struct {
 	RetryOptions // RetryOptions configures the retry behavior for failed tasks
 	PoolOptions  // PoolOptions configures the worker pool behavior
@@ -24,7 +24,7 @@ type RetryOptions struct {
 	retryBackoff RetryBackoff // retryBackoff determines the delay between retry attempts
 }
 
-// WithRetryMaxAttempts configures the maximum number of retry attempts for failed tasks.
+// WithRetryMaxAttempts configures the maximum number of [RetryWorker] attempts for failed tasks.
 // A value of 0 means no retries will be attempted.
 func WithRetryMaxAttempts(n int) func(*Options) {
 	return func(o *Options) {
@@ -48,8 +48,8 @@ func (b constantBackoff) NextRetry(time.Duration) time.Duration {
 	return time.Duration(b)
 }
 
-// WithRetryEvery configures a constant backoff strategy with the specified duration.
-// Each retry attempt will wait for exactly the same duration.
+// WithRetryEvery configures a constant [RetryBackoff] strategy with the specified duration.
+// Each [RetryWorker] attempt will wait for exactly the same duration.
 func WithRetryEvery(d time.Duration) func(*Options) {
 	return WithBackoff(constantBackoff(d))
 }
@@ -60,8 +60,9 @@ type exponentialBackoff struct {
 	maxDuration   time.Duration // maxDuration is the maximum delay duration
 }
 
-// WithRetryExponentially configures an exponential backoff strategy.
-// The delay between retries starts at 'start' and doubles until reaching 'max'.
+// WithRetryExponentially configures an exponential [RetryBackoff] strategy.
+// The delay between [RetryWorker] retries starts at 'start'
+// and doubles until reaching 'max'.
 func WithRetryExponentially(start, max time.Duration) func(*Options) {
 	return WithBackoff(exponentialBackoff{
 		startDuration: start,
@@ -85,22 +86,40 @@ func (b exponentialBackoff) NextRetry(d time.Duration) time.Duration {
 //
 //	5 workers * 1s delay = 5 executions per second
 type PoolOptions struct {
-	maxWorkers     int           // maxWorkers is the maximum number of concurrent workers in the pool
-	delayAfterWork time.Duration // delayAfterWork is the duration to wait after completing a task
+	maxCapacity        int           // maxCapacity is the maximum number of concurrent workers in the pool
+	workerIdleDuration time.Duration // workerIdleDuration is the duration to wait after completing a task
 }
 
 // WithPoolMaxWorkers configures the maximum number of concurrent workers in a pool.
 // This controls the level of parallelism when processing tasks.
+//
+// Deprecated: use [WithPoolMaxCapacity] instead.
 func WithPoolMaxWorkers(n int) func(*Options) {
+	return WithPoolMaxCapacity(n)
+}
+
+// WithPoolMaxWorkers configures the maximum number of concurrent [Worker]
+// instances in a [Pool]. This controls the level of parallelism when processing tasks.
+// A pool with max capacity M and task count N will generate min(N, M) workers.
+// A max capacity of zero or less will generate N workers.
+func WithPoolMaxCapacity(n int) func(*Options) {
 	return func(o *Options) {
-		o.maxWorkers = n
+		o.maxCapacity = n
 	}
 }
 
 // WithPoolWorkerDelay configures the delay between task executions for each worker.
 // This can help prevent overwhelming systems when processing many tasks.
+//
+// Deprecated: Use [WithPoolWorkerIdleDuration] instead.
 func WithPoolWorkerDelay(d time.Duration) func(*Options) {
+	return WithPoolWorkerIdleDuration(d)
+}
+
+// WithPoolWorkerIdleDuration configures the delay between task executions for each worker.
+// This can help prevent overwhelming systems when processing many tasks.
+func WithPoolWorkerIdleDuration(d time.Duration) func(*Options) {
 	return func(o *Options) {
-		o.delayAfterWork = d
+		o.workerIdleDuration = d
 	}
 }

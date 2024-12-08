@@ -37,12 +37,12 @@ type Worker[In any, Out any] interface {
 	execute(ctx context.Context, in In) (Out, error)
 }
 
-// Start executes the worker with the provided input.
+// Start executes the [Worker] with the provided input.
 func Start[In any, Out any](ctx context.Context, w Worker[In, Out], in In) (Out, error) {
 	return StartWithID(ctx, w, strconv.Itoa(rand.Int()), in)
 }
 
-// StartWithID executes the worker with the provided input and a specific [Worker] ID.
+// StartWithID executes the [Worker] with the provided input and a specific worker ID.
 // The worker's ID is added to the context and can be retrieved using [WorkerInfo].
 func StartWithID[In any, Out any](ctx context.Context, w Worker[In, Out], id string, in In) (Out, error) {
 	ctx = contextWithWorkerInfo(ctx, workerInfo{WorkerID: id})
@@ -65,7 +65,7 @@ type RetryWorker[In any, Out any] struct {
 
 // NewWorker creates a new [RetryWorker] with the specified options.
 // The provided [Task] will be executed with retry behavior based on the configuration.
-// [Options] can be provided to customize retry attempts and backoff strategy.
+// [Options] can be provided to customize retry attempts and [RetryBackoff] strategy.
 func NewWorker[In any, Out any](task Task[In, Out], opts ...func(*Options)) *RetryWorker[In, Out] {
 	options := Options{
 		RetryOptions: RetryOptions{
@@ -144,15 +144,18 @@ func (p Pool[In, Out]) execute(ctx context.Context, in []In) ([]Out, error) {
 		errQ     = make(chan error, count)
 		wg       = sync.WaitGroup{}
 		progress = newTaskProgress(float64(count))
+		capacity = min(p.options.maxCapacity, count)
 	)
 
-	if p.options.maxWorkers < 1 {
-		p.options.maxWorkers = count
+	// if user does not specify capacity, assume creation of as many workers
+	// as there are jobs.
+	if capacity < 1 {
+		capacity = count
 	}
 
 	prefix := WorkerInfo(ctx).WorkerID
 
-	for i := 0; i < p.options.maxWorkers; i++ {
+	for i := 0; i < capacity; i++ {
 		wg.Add(1)
 		go func(workerID int, wg *sync.WaitGroup) {
 			defer wg.Done()
@@ -219,7 +222,7 @@ func (p Pool[In, Out]) start(ctx context.Context,
 		default:
 			out, err := StartWithID(ctx, worker, workerID, job)
 			progress.increment()
-			time.Sleep(p.options.delayAfterWork)
+			time.Sleep(p.options.workerIdleDuration)
 			results <- out
 			errs <- err
 		}

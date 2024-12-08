@@ -83,8 +83,8 @@ func main() {
 
     // Create a pool with 5 workers
     pool := worker.Pool(
-        bee.WithPoolMaxWorkers(5),
-        bee.WithPoolWorkerDelay(time.Millisecond*100),
+        bee.WithPoolMaxCapacity(5),
+        bee.WithPoolWorkerIdleDuration(time.Millisecond*100),
     )
 
     // Process multiple inputs concurrently
@@ -116,5 +116,5 @@ func main() {
 
 ### Pool Options
 
-- `WithPoolMaxWorkers(n)`: Set maximum number of concurrent workers
-- `WithPoolWorkerDelay(duration)`: Set delay between task completions
+- `WithPoolMaxCapacity(n)`: Set maximum number of concurrent workers
+- `WithPoolWorkerIdleDuration(duration)`: Set delay between task completions
