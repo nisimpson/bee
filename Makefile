@@ -32,6 +32,15 @@ audit:
 	govulncheck ./...
 	go test -race -buildvcs -vet=off ./...
 
+## audit-ci: run quality control checks
+.PHONY: audit-ci
+audit:
+	go mod verify
+	go vet ./...
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	golangci-lint run --disable-all --enable staticcheck --config staticcheck.yml
+	go test -race -buildvcs -vet=off ./...
+
 # ==================================================================================== #
 # HELPERS
 # ==================================================================================== #
@@ -52,6 +61,9 @@ no-dirty:
 
 .PHONY: lint
 lint: tidy audit no-dirty
+
+.PHONY: lint-ci
+lint-ci: tidy audit-ci no-dirty
 
 ## push: push changes to the remote Git repository
 .PHONY: push
