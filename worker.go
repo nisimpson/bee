@@ -128,6 +128,13 @@ func newPool[In any, Out any](w Worker[In, Out], opts ...func(*Options)) *Pool[I
 	}
 }
 
+// NewPool creates a new worker pool for concurrent execution of the input [Task].
+// Add both retry and pool [Options] to configure the underlying [Worker] and [Pool] respectively.
+func NewPool[In any, Out any](t Task[In, Out], opts ...func(*Options)) *Pool[In, Out] {
+	w := NewWorker(t, opts...)
+	return newPool(w, opts...)
+}
+
 // Pool creates a new worker pool using this [RetryWorker] as the [Worker] implementation.
 // The provided options configure the pool's behavior.
 func (w RetryWorker[In, Out]) Pool(opts ...func(*Options)) *Pool[In, Out] {

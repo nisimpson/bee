@@ -9,6 +9,32 @@ import (
 	"github.com/nisimpson/bee"
 )
 
+func TestNewPool(t *testing.T) {
+	task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		return i * 2, nil
+	})
+
+	t.Run("creation with no options", func(t *testing.T) {
+		pool := bee.NewPool(task)
+		if pool == nil {
+			t.Error("Expected non-nil pool")
+		}
+	})
+
+	t.Run("creation with options", func(t *testing.T) {
+		pool := bee.NewPool(
+			task,
+			bee.WithPoolMaxCapacity(5),
+			bee.WithPoolMaxWorkers(10),
+			bee.WithPoolWorkerIdleDuration(time.Millisecond),
+			bee.WithRetryEvery(6*time.Second),
+		)
+		if pool == nil {
+			t.Error("Expected non-nil pool")
+		}
+	})
+}
+
 func TestNewWorker(t *testing.T) {
 	t.Run("creation with no options", func(t *testing.T) {
 		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {

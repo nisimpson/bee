@@ -87,6 +87,14 @@ func main() {
         bee.WithPoolWorkerIdleDuration(time.Millisecond*100),
     )
 
+    // Or, combine both steps with NewPool:
+    pool = bee.NewPool(task,
+        bee.WithRetryMaxAttempts(3),
+        bee.WithRetryExponentially(time.Second, time.Second*10),
+        bee.WithPoolMaxCapacity(5),
+        bee.WithPoolWorkerIdleDuration(time.Millisecond*100),
+    )
+
     // Process multiple inputs concurrently
     inputs := []int{1, 2, 3, 4, 5}
     results, err := bee.Start(context.Background(), pool, inputs)
