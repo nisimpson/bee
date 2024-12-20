@@ -236,7 +236,7 @@ func (p Pool[In, Out]) start(ctx context.Context,
 	}
 }
 
-// Stream provides streaming capabilities for processing input values through a worker pool.
+// Stream provides streaming capabilities for processing input values through a worker [Pool].
 // It allows for continuous processing of inputs with buffering and automatic flushing.
 type Stream[In any, Out any] struct {
 	options Options       // Configuration options for the stream
@@ -257,22 +257,20 @@ func newStream[In any, Out any](pool Pool[In, Out], opts ...func(*Options)) *Str
 	}
 }
 
-// NewStream creates a new Stream that processes items using the given Task.
+// NewStream creates a new [Stream] that processes items using the given [Task].
 // The stream will automatically create a pool for concurrent processing.
 func NewStream[In any, Out any](t Task[In, Out], opts ...func(*Options)) *Stream[In, Out] {
-	w := NewWorker(t, opts...)
-	p := newPool(w, opts...)
-	return p.Stream(opts...)
+	return NewWorker(t, opts...).Pool(opts...).Stream(opts...)
 }
 
-// Stream creates a new Stream that uses this Pool for processing.
+// Stream creates a new [Stream] that uses this [Pool] for processing.
 // The stream inherits the pool's concurrency settings while adding buffering capabilities.
 func (p Pool[In, Out]) Stream(opts ...func(*Options)) *Stream[In, Out] {
 	return newStream(p, opts...)
 }
 
 // execute processes items from the input channel using the configured pool.
-// Returns a Sink for accessing results and any error that occurred during setup.
+// Returns a [Sink] for accessing results and any error that occurred during setup.
 func (s Stream[In, Out]) execute(ctx context.Context, in chan In) (out Sink[Out], err error) {
 	sink := Sink[Out]{
 		outch: make(chan Out, s.options.bufferSize),
@@ -311,7 +309,7 @@ func (s Stream[In, Out]) flush(ctx context.Context, jobs []In, sink *Sink[Out]) 
 	}
 }
 
-// Sink handles the output stream from a Stream processor.
+// Sink handles the output stream from a [Stream] processor.
 // It provides separate channels for successful results and errors.
 type Sink[Out any] struct {
 	outch chan Out   // Channel for successful results
@@ -330,7 +328,7 @@ func (s Sink[Out]) Err() <-chan error {
 	return s.errch
 }
 
-// Close closes both the output and error channels of the Sink.
+// Close closes both the output and error channels of the [Sink].
 // This should be called when the Sink is no longer needed.
 func (s Sink[Out]) Close() {
 	close(s.outch)
