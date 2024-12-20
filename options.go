@@ -6,8 +6,9 @@ import (
 
 // Options combine retry and pool configuration options for a [Worker].
 type Options struct {
-	RetryOptions // RetryOptions configures the retry behavior for failed tasks
-	PoolOptions  // PoolOptions configures the worker pool behavior
+	RetryOptions  // RetryOptions configures the retry behavior for failed tasks
+	PoolOptions   // PoolOptions configures the worker pool behavior
+	StreamOptions // StreamOptions configures the stream behavior for the task stream.
 }
 
 // apply configures the Options struct using the provided option functions.
@@ -121,5 +122,26 @@ func WithPoolWorkerDelay(d time.Duration) func(*Options) {
 func WithPoolWorkerIdleDuration(d time.Duration) func(*Options) {
 	return func(o *Options) {
 		o.workerIdleDuration = d
+	}
+}
+
+type StreamOptions struct {
+	bufferSize int           // BufferSize is the size of the buffer used to store tasks before processing.
+	flushAfter time.Duration // FlushAfter is the duration after which the stream will be flushed if not empty.
+}
+
+// WithStreamBufferSize configures the buffer size for stream processing.
+// The buffer size determines how many items can be queued before processing begins.
+func WithStreamBufferSize(n int) func(*Options) {
+	return func(o *Options) {
+		o.bufferSize = n
+	}
+}
+
+// WithStreamFlushAfter sets the duration after which buffered items will be automatically processed.
+// A zero duration means items will only be processed when the buffer is full.
+func WithStreamFlushAfter(d time.Duration) func(*Options) {
+	return func(o *Options) {
+		o.flushAfter = d
 	}
 }
