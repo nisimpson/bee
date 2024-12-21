@@ -3,6 +3,7 @@ package bee_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestNewStream(t *testing.T) {
-	task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+	task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 		return i * 2, nil
 	})
 
@@ -39,7 +40,7 @@ func TestNewStream(t *testing.T) {
 }
 
 func TestNewPool(t *testing.T) {
-	task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+	task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 		return i * 2, nil
 	})
 
@@ -66,20 +67,20 @@ func TestNewPool(t *testing.T) {
 
 func TestNewWorker(t *testing.T) {
 	t.Run("creation with no options", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			return i * 2, nil
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 		if worker == nil {
 			t.Error("Expected non-nil worker")
 		}
 	})
 
 	t.Run("creation with options", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			return i * 2, nil
 		})
-		worker := bee.NewWorker(task,
+		worker := bee.NewRetryWorker(task,
 			bee.WithRetryMaxAttempts(3),
 			bee.WithRetryEvery(time.Second),
 		)
@@ -91,10 +92,10 @@ func TestNewWorker(t *testing.T) {
 
 func TestStart(t *testing.T) {
 	t.Run("successful execution", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			return i * 2, nil
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 
 		ctx := context.Background()
 		result, err := bee.Start(ctx, worker, 5)
@@ -108,10 +109,10 @@ func TestStart(t *testing.T) {
 
 	t.Run("execution with error", func(t *testing.T) {
 		expectedErr := errors.New("test error")
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			return 0, expectedErr
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 
 		ctx := context.Background()
 		_, err := bee.Start(ctx, worker, 5)
@@ -121,11 +122,11 @@ func TestStart(t *testing.T) {
 	})
 
 	t.Run("execution with context cancellation", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			<-ctx.Done()
 			return 0, ctx.Err()
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -139,14 +140,14 @@ func TestStart(t *testing.T) {
 
 func TestStartWithID(t *testing.T) {
 	t.Run("successful execution with ID", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			info := bee.WorkerInfo(ctx)
 			if info.WorkerID != "test-worker" {
 				t.Errorf("Expected worker ID 'test-worker', got %s", info.WorkerID)
 			}
 			return i * 2, nil
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 
 		ctx := context.Background()
 		result, err := bee.StartWithID(ctx, worker, "test-worker", 5)
@@ -159,14 +160,49 @@ func TestStartWithID(t *testing.T) {
 	})
 
 	t.Run("successful worker pool", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			info := bee.WorkerInfo(ctx)
 			if info.WorkerID != "test-worker-pool#0" {
 				t.Errorf("Expected worker ID 'test-worker-pool#0', got %s", info.WorkerID)
 			}
 			return i * 2, nil
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
+		ctx := context.Background()
+		pool := worker.Pool()
+		if pool == nil {
+			t.Error("Expected non-nil pool")
+		}
+		results, err := bee.StartWithID(ctx, pool, "test-worker-pool", []int{5})
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if results[0] != 10 {
+			t.Errorf("Expected result 10, got %d", results[0])
+		}
+	})
+
+	t.Run("compose two workers", func(t *testing.T) {
+		double := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
+			info := bee.WorkerInfo(ctx)
+			if info.WorkerID != "test-worker-pool#0" {
+				t.Errorf("Expected worker ID 'test-worker-pool#0', got %s", info.WorkerID)
+			}
+			return i * 2, nil
+		})
+		print := bee.NewTaskFunc(func(ctx context.Context, i int) (string, error) {
+			info := bee.WorkerInfo(ctx)
+			if info.WorkerID != "test-worker-pool#0" {
+				t.Errorf("Expected worker ID 'test-worker-pool#0', got %s", info.WorkerID)
+			}
+			return strconv.Itoa(i), nil
+		})
+
+		worker := bee.Compose(
+			bee.NewRetryWorker(double),
+			bee.NewRetryWorker(print),
+		)
+
 		ctx := context.Background()
 		pool := worker.Pool()
 		if pool == nil {
@@ -182,14 +218,14 @@ func TestStartWithID(t *testing.T) {
 	})
 
 	t.Run("successful pool stream", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			info := bee.WorkerInfo(ctx)
 			if !strings.Contains(info.WorkerID, "test-worker-stream") {
 				t.Errorf("Expected worker ID 'test-worker-stream#0', got %s", info.WorkerID)
 			}
 			return i * 2, nil
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 		ctx := context.Background()
 		stream := worker.Pool().Stream()
 		if stream == nil {
@@ -236,14 +272,14 @@ func TestStartWithID(t *testing.T) {
 	})
 
 	t.Run("successful pool stream with zero duration flush", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			info := bee.WorkerInfo(ctx)
 			if !strings.Contains(info.WorkerID, "test-worker-stream") {
 				t.Errorf("Expected worker ID 'test-worker-stream#0', got %s", info.WorkerID)
 			}
 			return i * 2, nil
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 		ctx := context.Background()
 		stream := worker.Pool().Stream(
 			bee.WithStreamFlushEvery(0),
@@ -295,14 +331,14 @@ func TestStartWithID(t *testing.T) {
 	})
 
 	t.Run("successful pool stream with zero buffer size", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			info := bee.WorkerInfo(ctx)
 			if !strings.Contains(info.WorkerID, "test-worker-stream") {
 				t.Errorf("Expected worker ID 'test-worker-stream', got %s", info.WorkerID)
 			}
 			return i * 2, nil
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 		ctx := context.Background()
 		stream := worker.Pool().Stream(
 			bee.WithStreamBufferSize(0),
@@ -354,14 +390,14 @@ func TestStartWithID(t *testing.T) {
 	})
 
 	t.Run("empty pool stream", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			info := bee.WorkerInfo(ctx)
 			if !strings.Contains(info.WorkerID, "test-worker-stream") {
 				t.Errorf("Expected worker ID 'test-worker-stream#0', got %s", info.WorkerID)
 			}
 			return i * 2, nil
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 		ctx := context.Background()
 		stream := worker.Pool().Stream(bee.WithStreamFlushEvery(time.Microsecond))
 		if stream == nil {
@@ -408,14 +444,14 @@ func TestStartWithID(t *testing.T) {
 	})
 
 	t.Run("cancelled pool stream", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			info := bee.WorkerInfo(ctx)
 			if !strings.Contains(info.WorkerID, "test-worker-stream") {
 				t.Errorf("Expected worker ID 'test-worker-stream#0', got %s", info.WorkerID)
 			}
 			return i * 2, nil
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 		ctx, cancel := context.WithCancel(context.Background())
 		stream := worker.Pool().Stream()
 		if stream == nil {
@@ -460,14 +496,14 @@ func TestStartWithID(t *testing.T) {
 	})
 
 	t.Run("failed pool stream", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			info := bee.WorkerInfo(ctx)
 			if !strings.Contains(info.WorkerID, "test-worker-stream") {
 				t.Errorf("Expected worker ID 'test-worker-stream#0', got %s", info.WorkerID)
 			}
 			return i * 2, errors.New("test error")
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 		ctx := context.Background()
 		stream := worker.Pool().Stream()
 		if stream == nil {
@@ -506,10 +542,10 @@ func TestStartWithID(t *testing.T) {
 
 	t.Run("execution with error", func(t *testing.T) {
 		expectedErr := errors.New("test error")
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			return 0, expectedErr
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 
 		ctx := context.Background()
 		_, err := bee.StartWithID(ctx, worker, "test-worker", 5)
@@ -519,11 +555,11 @@ func TestStartWithID(t *testing.T) {
 	})
 
 	t.Run("execution with context cancellation", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			<-ctx.Done()
 			return 0, ctx.Err()
 		})
-		worker := bee.NewWorker(task)
+		worker := bee.NewRetryWorker(task)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -535,11 +571,11 @@ func TestStartWithID(t *testing.T) {
 	})
 
 	t.Run("pool execution with context cancellation", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			<-ctx.Done()
 			return 0, ctx.Err()
 		})
-		worker := bee.NewWorker(task).Pool()
+		worker := bee.NewRetryWorker(task).Pool()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()

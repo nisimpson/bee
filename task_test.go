@@ -10,7 +10,7 @@ import (
 
 func TestNewTask(t *testing.T) {
 	t.Run("successful task execution", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			return i * 2, nil
 		})
 
@@ -26,7 +26,7 @@ func TestNewTask(t *testing.T) {
 
 	t.Run("task execution with error", func(t *testing.T) {
 		expectedErr := errors.New("test error")
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			return 0, expectedErr
 		})
 
@@ -38,7 +38,7 @@ func TestNewTask(t *testing.T) {
 	})
 
 	t.Run("task with context cancellation", func(t *testing.T) {
-		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		task := bee.NewTaskFunc(func(ctx context.Context, i int) (int, error) {
 			<-ctx.Done()
 			return 0, ctx.Err()
 		})

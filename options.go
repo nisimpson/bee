@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// Options combine retry and pool configuration options for a [Worker].
+// Options combine retry and pool configuration options for a [Task].
 type Options struct {
 	RetryOptions  // RetryOptions configures the retry behavior for failed tasks
 	PoolOptions   // PoolOptions configures the worker pool behavior
@@ -99,7 +99,7 @@ func WithPoolMaxWorkers(n int) func(*Options) {
 	return WithPoolMaxCapacity(n)
 }
 
-// WithPoolMaxWorkers configures the maximum number of concurrent [Worker]
+// WithPoolMaxWorkers configures the maximum number of concurrent [Task]
 // instances in a [Pool]. This controls the level of parallelism when processing tasks.
 // A pool with max capacity M and task count N will generate min(N, M) workers.
 // A max capacity of zero or less will generate N workers.

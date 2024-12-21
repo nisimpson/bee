@@ -10,41 +10,79 @@ import (
 	"time"
 )
 
-// Task represents a unit of work that can be executed by a [Worker].
+// Doer represents a unit of work that can be executed by a [Task].
 // The generic parameters In and Out represent the input and output types of the task.
-type Task[In any, Out any] interface {
+type Doer[In any, Out any] interface {
 	// Do is invoked by a [Worker] and should return an output or error if the task fails.
 	Do(context.Context, In) (Out, error)
 }
 
-// taskFunc is a function type that implements the Task interface.
-type taskFunc[In any, Out any] func(context.Context, In) (Out, error)
+// TaskFunc is a function type that implements the Task and Worker interfaces.
+type TaskFunc[In any, Out any] func(context.Context, In) (Out, error)
 
-// NewTask provides a convenient way to create a [Task] from a simple function that matches
+// NewTaskFunc provides a convenient way to create a [Doer] from a simple function that matches
 // the required signature.
-func NewTask[In any, Out any](f func(context.Context, In) (Out, error)) Task[In, Out] {
-	return taskFunc[In, Out](f)
+func NewTaskFunc[In any, Out any](f func(context.Context, In) (Out, error)) TaskFunc[In, Out] {
+	return TaskFunc[In, Out](f)
 }
 
-// Do implements the [Task] interface by executing the wrapped function.
-func (f taskFunc[In, Out]) Do(ctx context.Context, in In) (Out, error) {
+func NewTask[In any, Out any](doer Doer[In, Out]) TaskFunc[In, Out] {
+	return NewTaskFunc(f.Do)
+}
+
+func (f TaskFunc[In, Out]) Retry(opts ...func(*Options)) Task[In, Out] {
+	w := NewRetryWorker(f, opts...)
+	return w
+}
+
+func (f TaskFunc[In, Out]) Pool(opts ...func(*Options)) Task[[]In, []Out] {
+	p := NewPool(f, opts...)
+	return p
+}
+
+// Stream creates a new [Stream] that uses this [Pool] for processing.
+// The stream inherits the pool's concurrency settings while adding buffering capabilities.
+func (f TaskFunc[In, Out]) Stream(opts ...func(*Options)) Task[chan In, Sink[Out]] {
+	p := NewPool(f, opts...)
+	return newStream(p, opts...)
+}
+
+// execute allows doer to implement [Task].
+func (f TaskFunc[In, Out]) execute(ctx context.Context, in In) (Out, error) {
 	return f(ctx, in)
 }
 
-// Worker represents an entity capable of executing a [Task] with specific input and output types.
-type Worker[In any, Out any] interface {
+// Task represents an entity capable of executing a task with specific input and output types.
+type Task[In any, Out any] interface {
 	// execute processes the input and returns either the output or an error.
 	execute(ctx context.Context, in In) (Out, error)
 }
 
-// Start executes the [Worker] with the provided input.
-func Start[In any, Out any](ctx context.Context, w Worker[In, Out], in In) (Out, error) {
+// Compose bundles two workers {w, next}s, where w(T) = U and next(U) = V, and returns
+// a new [Task] w2 where w2(T) = V.
+func Compose[T any, U any, V any](w Task[T, U], next Task[U, V]) TaskFunc[T, V] {
+	return func(ctx context.Context, in T) (V, error) {
+		var (
+			u   U
+			v   V
+			err error
+		)
+		u, err = w.execute(ctx, in)
+		if err != nil {
+			return v, err
+		}
+		return next.execute(ctx, u)
+	}
+}
+
+// Start executes the [Task] with the provided input.
+func Start[In any, Out any](ctx context.Context, w Task[In, Out], in In) (Out, error) {
 	return StartWithID(ctx, w, strconv.Itoa(rand.Int()), in)
 }
 
-// StartWithID executes the [Worker] with the provided input and a specific worker ID.
+// StartWithID executes the [Task] with the provided input and a specific worker ID.
 // The worker's ID is added to the context and can be retrieved using [WorkerInfo].
-func StartWithID[In any, Out any](ctx context.Context, w Worker[In, Out], id string, in In) (Out, error) {
+func StartWithID[In any, Out any](ctx context.Context, w Task[In, Out], id string, in In) (Out, error) {
 	ctx = contextWithWorkerInfo(ctx, workerInfo{WorkerID: id})
 	return w.execute(ctx, in)
 }
@@ -56,31 +94,33 @@ type RetryBackoff interface {
 	NextRetry(prev time.Duration) time.Duration
 }
 
-// RetryWorker wraps a [Task] with retry functionality.
+// RetryWorker is a [Task] that wraps a [Doer] with retry functionality.
 // It will attempt to execute the task multiple times based on the configured [RetryOptions].
 type RetryWorker[In any, Out any] struct {
 	task    Task[In, Out] // task is the underlying task to execute with retries
 	options RetryOptions  // options configure the retry behavior
 }
 
-// NewWorker creates a new [RetryWorker] with the specified options.
-// The provided [Task] will be executed with retry behavior based on the configuration.
+// NewRetryWorker creates a new [RetryWorker] with the specified options.
+// The provided [Doer] will be executed with retry behavior based on the configuration.
 // [Options] can be provided to customize retry attempts and [RetryBackoff] strategy.
-func NewWorker[In any, Out any](task Task[In, Out], opts ...func(*Options)) *RetryWorker[In, Out] {
+//
+// By default, the retry [Task] will only perform one attempt to execute the task.
+func NewRetryWorker[In any, Out any](task Task[In, Out], opts ...func(*Options)) RetryWorker[In, Out] {
 	options := Options{
 		RetryOptions: RetryOptions{
-			maxAttempts:  3,
+			maxAttempts:  1,
 			retryBackoff: constantBackoff(0), // no backoff
 		},
 	}
 	options.apply(opts...)
-	return &RetryWorker[In, Out]{
+	return RetryWorker[In, Out]{
 		task:    task,
 		options: options.RetryOptions,
 	}
 }
 
-// execute implements the [Worker] interface by running the [Task] with retry logic.
+// execute implements the [Task] interface by running the underlying task with retry logic.
 // It will retry failed attempts according to the configured RetryOptions.
 func (w RetryWorker[In, Out]) execute(ctx context.Context, in In) (Out, error) {
 	var (
@@ -91,7 +131,7 @@ func (w RetryWorker[In, Out]) execute(ctx context.Context, in In) (Out, error) {
 	)
 
 	for i := 0; i < w.options.maxAttempts; i++ {
-		out, err = w.task.Do(ctx, in)
+		out, err = w.task.execute(ctx, in)
 		if err == nil {
 			return out, nil
 		}
@@ -111,34 +151,21 @@ func (w RetryWorker[In, Out]) execute(ctx context.Context, in In) (Out, error) {
 
 // Pool represents a worker pool that can execute multiple tasks concurrently.
 type Pool[In any, Out any] struct {
-	worker  Worker[In, Out] // worker is the underlying worker instance used to process tasks
-	options PoolOptions     // options contains the configuration for the worker pool
+	worker  Task[In, Out] // worker is the underlying task instance used to process jobs
+	options PoolOptions   // options contains the configuration for the worker pool
 }
 
-// newPool creates a new worker pool with the specified worker and options.
-// The pool will use the provided worker to process tasks concurrently.
-func newPool[In any, Out any](w Worker[In, Out], opts ...func(*Options)) *Pool[In, Out] {
+// NewPool creates a new worker pool with the specified worker and options.
+// The pool will use the provided worker to process jobs concurrently.
+func NewPool[In any, Out any](t Task[In, Out], opts ...func(*Options)) Pool[In, Out] {
 	options := Options{
 		PoolOptions: PoolOptions{}}
 
 	options.apply(opts...)
-	return &Pool[In, Out]{
-		worker:  w,
+	return Pool[In, Out]{
+		worker:  t,
 		options: options.PoolOptions,
 	}
-}
-
-// NewPool creates a new worker pool for concurrent execution of the input [Task].
-// Add both retry and pool [Options] to configure the underlying [Worker] and [Pool] respectively.
-func NewPool[In any, Out any](t Task[In, Out], opts ...func(*Options)) *Pool[In, Out] {
-	w := NewWorker(t, opts...)
-	return newPool(w, opts...)
-}
-
-// Pool creates a new worker pool using this [RetryWorker] as the [Worker] implementation.
-// The provided options configure the pool's behavior.
-func (w RetryWorker[In, Out]) Pool(opts ...func(*Options)) *Pool[In, Out] {
-	return newPool(w, opts...)
 }
 
 // execute processes a batch of inputs concurrently using the pool of workers.
@@ -215,7 +242,7 @@ func (p Pool[In, Out]) start(ctx context.Context,
 	jobs <-chan In,
 	results chan<- Out,
 	errs chan<- error,
-	worker Worker[In, Out],
+	worker Task[In, Out],
 	progress *taskProgress,
 ) {
 	workerID := fmt.Sprintf("%s#%s", prefix, strconv.Itoa(idx))
@@ -276,26 +303,21 @@ type Stream[In any, Out any] struct {
 
 // newStream creates a new Stream instance with the given pool and options.
 // The stream will use the pool for processing items in batches.
-func newStream[In any, Out any](pool Pool[In, Out], opts ...func(*Options)) *Stream[In, Out] {
+func newStream[In any, Out any](pool Pool[In, Out], opts ...func(*Options)) Stream[In, Out] {
 	options := Options{}
 	options.apply(opts...)
 
-	return &Stream[In, Out]{
+	return Stream[In, Out]{
 		options: options,
 		pool:    pool,
 	}
 }
 
-// NewStream creates a new [Stream] that processes items using the given [Task].
+// NewStream creates a new [Stream] that processes items using the given [Doer].
 // The stream will automatically create a pool for concurrent processing.
 func NewStream[In any, Out any](t Task[In, Out], opts ...func(*Options)) *Stream[In, Out] {
-	return NewWorker(t, opts...).Pool(opts...).Stream(opts...)
-}
-
-// Stream creates a new [Stream] that uses this [Pool] for processing.
-// The stream inherits the pool's concurrency settings while adding buffering capabilities.
-func (p Pool[In, Out]) Stream(opts ...func(*Options)) *Stream[In, Out] {
-	return newStream(p, opts...)
+	pool := NewPool(t, opts...)
+	return newStream(pool, opts...)
 }
 
 // execute processes items from the input channel using the configured pool.
