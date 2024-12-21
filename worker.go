@@ -238,6 +238,37 @@ func (p Pool[In, Out]) start(ctx context.Context,
 
 // Stream provides streaming capabilities for processing input values through a worker [Pool].
 // It allows for continuous processing of inputs with buffering and automatic flushing.
+//
+// Stream processors are workers that expect a channel of type In as input, and will
+// immediately return an output [Sink] when executed via [Start] or [StartWithID]. Use the
+// sink's output and error channels to retrieve the task results:
+//
+//	input := make(chan int)
+//	sink, _ := bee.Start(ctx, stream, input)
+//	results := make([]int, 0)
+//	errs := make([]error, 0)
+//
+//	go func() {
+//		input <- 1
+//		close(input)
+//	}()
+//
+//	for done := false; !done; {
+//		select {
+//		case <-ctx.Done():
+//			done = true
+//		case result, next := <-sink.Chan():
+//			if !next {
+//				done = true
+//			} else {
+//				results = append(results, result)
+//			}
+//		case err := <-sink.Err():
+//			errs = append(errs, err)
+//		case <-time.After(timeoutDuration):
+//			log.Fatal("Timeout waiting for results and errors")
+//		}
+//	}
 type Stream[In any, Out any] struct {
 	options Options       // Configuration options for the stream
 	pool    Pool[In, Out] // The underlying worker pool used for processing
@@ -247,8 +278,6 @@ type Stream[In any, Out any] struct {
 // The stream will use the pool for processing items in batches.
 func newStream[In any, Out any](pool Pool[In, Out], opts ...func(*Options)) *Stream[In, Out] {
 	options := Options{}
-	options.bufferSize = 100
-	options.flushAfter = time.Millisecond
 	options.apply(opts...)
 
 	return &Stream[In, Out]{
@@ -282,7 +311,7 @@ func (s Stream[In, Out]) execute(ctx context.Context, in chan In) (out Sink[Out]
 
 // collect accumulates items from the source channel into batches for processing.
 // Batches are processed when either the buffer is full or the flush timer expires.
-func (s Stream[In, Out]) collect(ctx context.Context, source chan In, sink *Sink[Out]) {
+func (s Stream[In, Out]) collect(ctx context.Context, source <-chan In, sink *Sink[Out]) {
 	jobs := make([]In, 0, s.options.bufferSize)
 	defer sink.close()
 	for {
@@ -295,7 +324,7 @@ func (s Stream[In, Out]) collect(ctx context.Context, source chan In, sink *Sink
 				return
 			}
 			jobs = append(jobs, job)
-		case <-time.After(s.options.flushAfter):
+		case <-time.After(s.options.flushEvery):
 			jobs = s.flush(ctx, jobs, sink)
 		}
 	}
@@ -325,7 +354,7 @@ type Sink[Out any] struct {
 }
 
 // Chan returns a channel that provides access to successful task results.
-// The channel is closed when processing is complete or an error occurs.
+// The channel is closed when processing is complete.
 func (s Sink[Out]) Chan() <-chan Out {
 	return s.outch
 }
@@ -336,7 +365,7 @@ func (s Sink[Out]) Err() <-chan error {
 	return s.errch
 }
 
-// Close closes both the output and error channels of the [Sink].
+// close closes both the output and error channels of the [Sink].
 // This should be called when the Sink is no longer needed.
 func (s Sink[Out]) close() {
 	close(s.outch)

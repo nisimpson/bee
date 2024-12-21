@@ -30,7 +30,7 @@ func TestNewStream(t *testing.T) {
 			bee.WithPoolWorkerIdleDuration(time.Millisecond),
 			bee.WithRetryEvery(6*time.Second),
 			bee.WithStreamBufferSize(100),
-			bee.WithStreamFlushAfter(time.Millisecond),
+			bee.WithStreamFlushEvery(time.Millisecond),
 		)
 		if stream == nil {
 			t.Error("Expected non-nil stream")
@@ -213,7 +213,6 @@ func TestStartWithID(t *testing.T) {
 			select {
 			case <-ctx.Done():
 				done = true
-				continue
 			case result, next := <-sink.Chan():
 				if !next {
 					done = true
@@ -236,6 +235,124 @@ func TestStartWithID(t *testing.T) {
 		}
 	})
 
+	t.Run("successful pool stream with zero duration flush", func(t *testing.T) {
+		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+			info := bee.WorkerInfo(ctx)
+			if !strings.Contains(info.WorkerID, "test-worker-stream") {
+				t.Errorf("Expected worker ID 'test-worker-stream#0', got %s", info.WorkerID)
+			}
+			return i * 2, nil
+		})
+		worker := bee.NewWorker(task)
+		ctx := context.Background()
+		stream := worker.Pool().Stream(
+			bee.WithStreamFlushEvery(0),
+		)
+		if stream == nil {
+			t.Error("Expected non-nil stream")
+		}
+
+		ints := make(chan int, 2)
+		go func() {
+			for value := range 1000 {
+				ints <- value
+			}
+			close(ints)
+		}()
+
+		sink, err := bee.StartWithID(ctx, stream, "test-worker-stream", ints)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+
+		results := make([]int, 0)
+		errs := make([]error, 0)
+
+		for done := false; !done; {
+			select {
+			case <-ctx.Done():
+				done = true
+			case result, next := <-sink.Chan():
+				if !next {
+					done = true
+					continue
+				}
+				results = append(results, result)
+			case err := <-sink.Err():
+				errs = append(errs, err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("Timeout waiting for results and errors")
+			}
+		}
+
+		if errors.Join(errs...) != nil {
+			t.Errorf("Expected no errors, got %v", errors.Join(errs...))
+		}
+
+		if len(results) == 0 {
+			t.Errorf("Expected results")
+		}
+	})
+
+	t.Run("successful pool stream with zero buffer size", func(t *testing.T) {
+		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+			info := bee.WorkerInfo(ctx)
+			if !strings.Contains(info.WorkerID, "test-worker-stream") {
+				t.Errorf("Expected worker ID 'test-worker-stream', got %s", info.WorkerID)
+			}
+			return i * 2, nil
+		})
+		worker := bee.NewWorker(task)
+		ctx := context.Background()
+		stream := worker.Pool().Stream(
+			bee.WithStreamBufferSize(0),
+		)
+		if stream == nil {
+			t.Error("Expected non-nil stream")
+		}
+
+		ints := make(chan int, 2)
+		go func() {
+			for value := range 1000 {
+				ints <- value
+			}
+			close(ints)
+		}()
+
+		sink, err := bee.StartWithID(ctx, stream, "test-worker-stream", ints)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+
+		results := make([]int, 0)
+		errs := make([]error, 0)
+
+		for done := false; !done; {
+			select {
+			case <-ctx.Done():
+				done = true
+			case result, next := <-sink.Chan():
+				if !next {
+					done = true
+					continue
+				}
+				results = append(results, result)
+			case err := <-sink.Err():
+				errs = append(errs, err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("Timeout waiting for results and errors")
+			}
+		}
+
+		if errors.Join(errs...) != nil {
+			t.Errorf("Expected no errors, got %v", errors.Join(errs...))
+		}
+
+		if len(results) == 0 {
+			t.Errorf("Expected results")
+		}
+	})
+
 	t.Run("empty pool stream", func(t *testing.T) {
 		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
 			info := bee.WorkerInfo(ctx)
@@ -246,7 +363,7 @@ func TestStartWithID(t *testing.T) {
 		})
 		worker := bee.NewWorker(task)
 		ctx := context.Background()
-		stream := worker.Pool().Stream(bee.WithStreamFlushAfter(time.Microsecond))
+		stream := worker.Pool().Stream(bee.WithStreamFlushEvery(time.Microsecond))
 		if stream == nil {
 			t.Error("Expected non-nil stream")
 		}
@@ -268,7 +385,6 @@ func TestStartWithID(t *testing.T) {
 			select {
 			case <-ctx.Done():
 				done = true
-				continue
 			case result, next := <-sink.Chan():
 				if !next {
 					done = true
@@ -321,7 +437,6 @@ func TestStartWithID(t *testing.T) {
 			select {
 			case <-ctx.Done():
 				done = true
-				continue
 			case result, next := <-sink.Chan():
 				if !next {
 					done = true
@@ -376,7 +491,6 @@ func TestStartWithID(t *testing.T) {
 			case _, next := <-sink.Chan():
 				if !next {
 					done = true
-					continue
 				}
 			case err := <-sink.Err():
 				errs = append(errs, err)

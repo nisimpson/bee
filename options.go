@@ -126,22 +126,23 @@ func WithPoolWorkerIdleDuration(d time.Duration) func(*Options) {
 }
 
 type StreamOptions struct {
-	bufferSize int           // BufferSize is the size of the buffer used to store tasks before processing.
-	flushAfter time.Duration // FlushAfter is the duration after which the stream will be flushed if not empty.
+	bufferSize int           // bufferSize is the size of the buffer used to store tasks before processing.
+	flushEvery time.Duration // flushEvery is the duration after which the stream will be flushed if not empty.
 }
 
 // WithStreamBufferSize configures the buffer size for stream processing.
-// The buffer size determines how many items can be queued before processing begins.
+// The buffer size determines the maximum number of results sent to the sink channel
+// before blocking the processor.
 func WithStreamBufferSize(n int) func(*Options) {
 	return func(o *Options) {
 		o.bufferSize = n
 	}
 }
 
-// WithStreamFlushAfter sets the duration after which buffered items will be automatically processed.
-// A zero duration means items will only be processed when the buffer is full.
-func WithStreamFlushAfter(d time.Duration) func(*Options) {
+// WithStreamFlushEvery sets the duration after which buffered items will be automatically processed.
+// A zero duration will cause the buffer to flush immediately.
+func WithStreamFlushEvery(d time.Duration) func(*Options) {
 	return func(o *Options) {
-		o.flushAfter = d
+		o.flushEvery = d
 	}
 }
