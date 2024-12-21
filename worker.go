@@ -284,15 +284,14 @@ func (s Stream[In, Out]) execute(ctx context.Context, in chan In) (out Sink[Out]
 // Batches are processed when either the buffer is full or the flush timer expires.
 func (s Stream[In, Out]) collect(ctx context.Context, source chan In, sink *Sink[Out]) {
 	jobs := make([]In, 0, s.options.bufferSize)
+	defer sink.close()
 	for {
 		select {
 		case <-ctx.Done():
-			sink.close()
 			return
 		case job, next := <-source:
 			if !next {
 				s.flush(ctx, jobs, sink)
-				sink.close()
 				return
 			}
 			jobs = append(jobs, job)
