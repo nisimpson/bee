@@ -287,26 +287,35 @@ func (s Stream[In, Out]) collect(ctx context.Context, source chan In, sink *Sink
 	for {
 		select {
 		case <-ctx.Done():
+			sink.close()
 			return
-		case job := <-source:
+		case job, next := <-source:
+			if !next {
+				s.flush(ctx, jobs, sink)
+				sink.close()
+				return
+			}
 			jobs = append(jobs, job)
 		case <-time.After(s.options.flushAfter):
-			if len(jobs) > 0 {
-				s.flush(ctx, jobs, sink)
-				jobs = jobs[:0]
-			}
+			jobs = s.flush(ctx, jobs, sink)
 		}
 	}
 }
 
 // flush processes a batch of accumulated items using the worker pool.
 // Results and errors are sent to the appropriate sink channels.
-func (s Stream[In, Out]) flush(ctx context.Context, jobs []In, sink *Sink[Out]) {
+func (s Stream[In, Out]) flush(ctx context.Context, jobs []In, sink *Sink[Out]) []In {
+	if len(jobs) == 0 {
+		return nil
+	}
+
 	results, err := s.pool.execute(ctx, jobs)
 	sink.errch <- err
 	for _, result := range results {
 		sink.outch <- result
 	}
+
+	return nil
 }
 
 // Sink handles the output stream from a [Stream] processor.
@@ -316,9 +325,9 @@ type Sink[Out any] struct {
 	errch chan error // Channel for errors encountered during processing
 }
 
-// Out returns a channel that provides access to successful task results.
+// Chan returns a channel that provides access to successful task results.
 // The channel is closed when processing is complete or an error occurs.
-func (s Sink[Out]) Out() <-chan Out {
+func (s Sink[Out]) Chan() <-chan Out {
 	return s.outch
 }
 
@@ -330,7 +339,7 @@ func (s Sink[Out]) Err() <-chan error {
 
 // Close closes both the output and error channels of the [Sink].
 // This should be called when the Sink is no longer needed.
-func (s Sink[Out]) Close() {
+func (s Sink[Out]) close() {
 	close(s.outch)
 	close(s.errch)
 }

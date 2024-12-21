@@ -3,11 +3,40 @@ package bee_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/nisimpson/bee"
 )
+
+func TestNewStream(t *testing.T) {
+	task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+		return i * 2, nil
+	})
+
+	t.Run("creation with no options", func(t *testing.T) {
+		stream := bee.NewStream(task)
+		if stream == nil {
+			t.Error("Expected non-nil stream")
+		}
+	})
+
+	t.Run("creation with options", func(t *testing.T) {
+		stream := bee.NewStream(
+			task,
+			bee.WithPoolMaxCapacity(5),
+			bee.WithPoolMaxWorkers(10),
+			bee.WithPoolWorkerIdleDuration(time.Millisecond),
+			bee.WithRetryEvery(6*time.Second),
+			bee.WithStreamBufferSize(100),
+			bee.WithStreamFlushAfter(time.Millisecond),
+		)
+		if stream == nil {
+			t.Error("Expected non-nil stream")
+		}
+	})
+}
 
 func TestNewPool(t *testing.T) {
 	task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
@@ -149,6 +178,215 @@ func TestStartWithID(t *testing.T) {
 		}
 		if results[0] != 10 {
 			t.Errorf("Expected result 10, got %d", results[0])
+		}
+	})
+
+	t.Run("successful pool stream", func(t *testing.T) {
+		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+			info := bee.WorkerInfo(ctx)
+			if !strings.Contains(info.WorkerID, "test-worker-stream") {
+				t.Errorf("Expected worker ID 'test-worker-stream#0', got %s", info.WorkerID)
+			}
+			return i * 2, nil
+		})
+		worker := bee.NewWorker(task)
+		ctx := context.Background()
+		stream := worker.Pool().Stream()
+		if stream == nil {
+			t.Error("Expected non-nil stream")
+		}
+
+		ints := make(chan int, 2)
+		ints <- 5
+		ints <- 7
+		close(ints)
+
+		sink, err := bee.StartWithID(ctx, stream, "test-worker-stream", ints)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+
+		results := make([]int, 0)
+		errs := make([]error, 0)
+
+		for done := false; !done; {
+			select {
+			case <-ctx.Done():
+				done = true
+				continue
+			case result, next := <-sink.Chan():
+				if !next {
+					done = true
+					continue
+				}
+				results = append(results, result)
+			case err := <-sink.Err():
+				errs = append(errs, err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("Timeout waiting for results and errors")
+			}
+		}
+
+		if errors.Join(errs...) != nil {
+			t.Errorf("Expected no errors, got %v", errors.Join(errs...))
+		}
+
+		if results[0] != 10 {
+			t.Errorf("Expected result 10, got %d", results[0])
+		}
+	})
+
+	t.Run("empty pool stream", func(t *testing.T) {
+		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+			info := bee.WorkerInfo(ctx)
+			if !strings.Contains(info.WorkerID, "test-worker-stream") {
+				t.Errorf("Expected worker ID 'test-worker-stream#0', got %s", info.WorkerID)
+			}
+			return i * 2, nil
+		})
+		worker := bee.NewWorker(task)
+		ctx := context.Background()
+		stream := worker.Pool().Stream(bee.WithStreamFlushAfter(time.Microsecond))
+		if stream == nil {
+			t.Error("Expected non-nil stream")
+		}
+
+		ints := make(chan int, 2)
+
+		sink, err := bee.StartWithID(ctx, stream, "test-worker-stream", ints)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+
+		time.Sleep(2 * time.Millisecond)
+		close(ints)
+
+		results := make([]int, 0)
+		errs := make([]error, 0)
+
+		for done := false; !done; {
+			select {
+			case <-ctx.Done():
+				done = true
+				continue
+			case result, next := <-sink.Chan():
+				if !next {
+					done = true
+					continue
+				}
+				results = append(results, result)
+			case err := <-sink.Err():
+				errs = append(errs, err)
+			case <-time.After(1 * time.Second):
+				t.Fatal("Timeout waiting for results and errors")
+			}
+		}
+
+		if err := errors.Join(errs...); err != nil {
+			t.Errorf("Expected no errors, got %v", err)
+		}
+
+		if len(results) != 0 {
+			t.Errorf("Expected no results, got %d", results[0])
+		}
+	})
+
+	t.Run("cancelled pool stream", func(t *testing.T) {
+		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+			info := bee.WorkerInfo(ctx)
+			if !strings.Contains(info.WorkerID, "test-worker-stream") {
+				t.Errorf("Expected worker ID 'test-worker-stream#0', got %s", info.WorkerID)
+			}
+			return i * 2, nil
+		})
+		worker := bee.NewWorker(task)
+		ctx, cancel := context.WithCancel(context.Background())
+		stream := worker.Pool().Stream()
+		if stream == nil {
+			t.Error("Expected non-nil stream")
+		}
+
+		ints := make(chan int, 2)
+
+		sink, err := bee.StartWithID(ctx, stream, "test-worker-stream", ints)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+
+		cancel()
+		results := make([]int, 0)
+		errs := make([]error, 0)
+
+		for done := false; !done; {
+			select {
+			case <-ctx.Done():
+				done = true
+				continue
+			case result, next := <-sink.Chan():
+				if !next {
+					done = true
+					continue
+				}
+				results = append(results, result)
+			case err := <-sink.Err():
+				errs = append(errs, err)
+			case <-time.After(1 * time.Second):
+				t.Fatal("Timeout waiting for results and errors")
+			}
+		}
+
+		if len(errs) != 0 {
+			t.Errorf("Expected no errors, got %d", len(errs))
+		}
+
+		if len(results) != 0 {
+			t.Errorf("Expected no results, got %d", results[0])
+		}
+	})
+
+	t.Run("failed pool stream", func(t *testing.T) {
+		task := bee.NewTask(func(ctx context.Context, i int) (int, error) {
+			info := bee.WorkerInfo(ctx)
+			if !strings.Contains(info.WorkerID, "test-worker-stream") {
+				t.Errorf("Expected worker ID 'test-worker-stream#0', got %s", info.WorkerID)
+			}
+			return i * 2, errors.New("test error")
+		})
+		worker := bee.NewWorker(task)
+		ctx := context.Background()
+		stream := worker.Pool().Stream()
+		if stream == nil {
+			t.Error("Expected non-nil stream")
+		}
+
+		ints := make(chan int, 2)
+		ints <- 5
+		ints <- 7
+		close(ints)
+
+		sink, err := bee.StartWithID(ctx, stream, "test-worker-stream", ints)
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+
+		errs := make([]error, 0)
+
+		for done := false; !done; {
+			select {
+			case _, next := <-sink.Chan():
+				if !next {
+					done = true
+					continue
+				}
+			case err := <-sink.Err():
+				errs = append(errs, err)
+			case <-time.After(1 * time.Second):
+				t.Fatal("Timeout waiting for results and errors")
+			}
+		}
+
+		if errors.Join(errs...).Error() == "" {
+			t.Errorf("Expected error 'test error', got empty")
 		}
 	})
 
