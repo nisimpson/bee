@@ -14,7 +14,7 @@ func TestWithRetryMaxAttempts(t *testing.T) {
 		option(opts)
 
 		// Test implementation details through behavior in NewWorker
-		NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryMaxAttempts(maxAttempts))
 	})
@@ -24,7 +24,7 @@ func TestWithRetryMaxAttempts(t *testing.T) {
 		option := WithRetryMaxAttempts(0)
 		option(opts)
 
-		NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryMaxAttempts(0))
 	})
@@ -34,7 +34,7 @@ func TestWithRetryMaxAttempts(t *testing.T) {
 		option := WithRetryMaxAttempts(-1)
 		option(opts)
 
-		NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryMaxAttempts(-1))
 	})
@@ -47,7 +47,7 @@ func TestWithRetryEvery(t *testing.T) {
 		option := WithRetryEvery(duration)
 		option(opts)
 
-		NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryEvery(duration))
 	})
@@ -57,7 +57,7 @@ func TestWithRetryEvery(t *testing.T) {
 		option := WithRetryEvery(0)
 		option(opts)
 
-		NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryEvery(0))
 	})
@@ -67,7 +67,7 @@ func TestWithRetryEvery(t *testing.T) {
 		option := WithRetryEvery(-time.Second)
 		option(opts)
 
-		NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryEvery(-time.Second))
 	})
@@ -79,7 +79,7 @@ func TestWithRetryExponentially(t *testing.T) {
 		max := time.Minute
 		option := WithRetryExponentially(start, max)
 
-		NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), option)
 	})
@@ -89,7 +89,7 @@ func TestWithRetryExponentially(t *testing.T) {
 		max := time.Second
 		option := WithRetryExponentially(start, max)
 
-		NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), option)
 	})
@@ -102,10 +102,10 @@ func TestWithPoolMaxWorkers(t *testing.T) {
 		option := WithPoolMaxWorkers(numWorkers)
 		option(opts)
 
-		worker := NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		worker := Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}))
-		NewPool(worker, WithPoolMaxWorkers(numWorkers))
+		Pool(worker, WithPoolMaxWorkers(numWorkers))
 	})
 
 	t.Run("zero workers", func(t *testing.T) {
@@ -113,10 +113,10 @@ func TestWithPoolMaxWorkers(t *testing.T) {
 		option := WithPoolMaxWorkers(0)
 		option(opts)
 
-		worker := NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		worker := Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}))
-		NewPool(worker, WithPoolMaxWorkers(0))
+		Pool(worker, WithPoolMaxWorkers(0))
 	})
 }
 
@@ -127,10 +127,10 @@ func TestWithPoolWorkerDelay(t *testing.T) {
 		option := WithPoolWorkerDelay(delay)
 		option(opts)
 
-		worker := NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		worker := Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}))
-		NewPool(worker, WithPoolWorkerDelay(delay))
+		Pool(worker, WithPoolWorkerDelay(delay))
 	})
 
 	t.Run("zero delay", func(t *testing.T) {
@@ -138,10 +138,10 @@ func TestWithPoolWorkerDelay(t *testing.T) {
 		option := WithPoolWorkerDelay(0)
 		option(opts)
 
-		worker := NewRetryWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		worker := Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}))
-		NewPool(worker, WithPoolWorkerDelay(0))
+		Pool(worker, WithPoolWorkerDelay(0))
 	})
 }
 

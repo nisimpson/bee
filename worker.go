@@ -17,45 +17,48 @@ type Doer[In any, Out any] interface {
 	Do(context.Context, In) (Out, error)
 }
 
-// TaskFunc is a function type that implements the Task and Worker interfaces.
-type TaskFunc[In any, Out any] func(context.Context, In) (Out, error)
-
-// NewTaskFunc provides a convenient way to create a [Doer] from a simple function that matches
-// the required signature.
-func NewTaskFunc[In any, Out any](f func(context.Context, In) (Out, error)) TaskFunc[In, Out] {
-	return TaskFunc[In, Out](f)
-}
-
-func NewTask[In any, Out any](doer Doer[In, Out]) TaskFunc[In, Out] {
-	return NewTaskFunc(f.Do)
-}
-
-func (f TaskFunc[In, Out]) Retry(opts ...func(*Options)) Task[In, Out] {
-	w := NewRetryWorker(f, opts...)
-	return w
-}
-
-func (f TaskFunc[In, Out]) Pool(opts ...func(*Options)) Task[[]In, []Out] {
-	p := NewPool(f, opts...)
-	return p
-}
-
-// Stream creates a new [Stream] that uses this [Pool] for processing.
-// The stream inherits the pool's concurrency settings while adding buffering capabilities.
-func (f TaskFunc[In, Out]) Stream(opts ...func(*Options)) Task[chan In, Sink[Out]] {
-	p := NewPool(f, opts...)
-	return newStream(p, opts...)
-}
-
-// execute allows doer to implement [Task].
-func (f TaskFunc[In, Out]) execute(ctx context.Context, in In) (Out, error) {
-	return f(ctx, in)
-}
-
 // Task represents an entity capable of executing a task with specific input and output types.
 type Task[In any, Out any] interface {
 	// execute processes the input and returns either the output or an error.
 	execute(ctx context.Context, in In) (Out, error)
+}
+
+// execute allows the function to implement [Task].
+func (f TaskFunc[In, Out]) execute(ctx context.Context, in In) (Out, error) {
+	return f(ctx, in)
+}
+
+// TaskFunc is a function type that implements the [Task] interface.
+type TaskFunc[In any, Out any] func(context.Context, In) (Out, error)
+
+// NewTask provides a convenient way to create a [Task] from a simple function that matches
+// the required signature.
+func NewTask[In any, Out any](f func(context.Context, In) (Out, error)) TaskFunc[In, Out] {
+	return TaskFunc[In, Out](f)
+}
+
+// Do wraps a [Doer] into an executable [Task].
+func Do[In any, Out any](doer Doer[In, Out]) TaskFunc[In, Out] {
+	return NewTask(doer.Do)
+}
+
+// Retry returns a new [TaskFunc] that wraps a [RetryWorker] with the target [Options].
+func (f TaskFunc[In, Out]) Retry(opts ...func(*Options)) TaskFunc[In, Out] {
+	w := NewRetryWorker(f, opts...)
+	return func(ctx context.Context, i In) (Out, error) {
+		return w.execute(ctx, i)
+	}
+}
+
+// Pool creates a new [TaskPool] that uses this [TaskFunc] for processing.
+func (f TaskFunc[In, Out]) Pool(opts ...func(*Options)) TaskPool[In, Out] {
+	return NewPool(f, opts...)
+}
+
+// Stream creates a new [TaskStream] that uses this [TaskFunc] for processing.
+// The stream inherits the pool's concurrency settings while adding buffering capabilities.
+func (f TaskFunc[In, Out]) Stream(opts ...func(*Options)) TaskStream[In, Out] {
+	return NewStream(f, opts...)
 }
 
 // Compose bundles two workers {w, next}s, where w(T) = U and next(U) = V, and returns
@@ -149,20 +152,20 @@ func (w RetryWorker[In, Out]) execute(ctx context.Context, in In) (Out, error) {
 	return out, err
 }
 
-// Pool represents a worker pool that can execute multiple tasks concurrently.
-type Pool[In any, Out any] struct {
+// TaskPool represents a worker pool that can execute multiple tasks concurrently.
+type TaskPool[In any, Out any] struct {
 	worker  Task[In, Out] // worker is the underlying task instance used to process jobs
 	options PoolOptions   // options contains the configuration for the worker pool
 }
 
 // NewPool creates a new worker pool with the specified worker and options.
 // The pool will use the provided worker to process jobs concurrently.
-func NewPool[In any, Out any](t Task[In, Out], opts ...func(*Options)) Pool[In, Out] {
+func NewPool[In any, Out any](t Task[In, Out], opts ...func(*Options)) TaskPool[In, Out] {
 	options := Options{
 		PoolOptions: PoolOptions{}}
 
 	options.apply(opts...)
-	return Pool[In, Out]{
+	return TaskPool[In, Out]{
 		worker:  t,
 		options: options.PoolOptions,
 	}
@@ -170,7 +173,7 @@ func NewPool[In any, Out any](t Task[In, Out], opts ...func(*Options)) Pool[In, 
 
 // execute processes a batch of inputs concurrently using the pool of workers.
 // It returns the outputs in the same order as the inputs, or an error if the execution fails.
-func (p Pool[In, Out]) execute(ctx context.Context, in []In) ([]Out, error) {
+func (p TaskPool[In, Out]) execute(ctx context.Context, in []In) ([]Out, error) {
 	var (
 		count    = len(in)
 		queue    = make(chan In, count)
@@ -236,7 +239,7 @@ func (p Pool[In, Out]) execute(ctx context.Context, in []In) ([]Out, error) {
 
 // start launches worker goroutines to process tasks from the input queue.
 // It manages the worker lifecycle and coordinates task execution.
-func (p Pool[In, Out]) start(ctx context.Context,
+func (p TaskPool[In, Out]) start(ctx context.Context,
 	idx int,
 	prefix string,
 	jobs <-chan In,
@@ -263,10 +266,10 @@ func (p Pool[In, Out]) start(ctx context.Context,
 	}
 }
 
-// Stream provides streaming capabilities for processing input values through a worker [Pool].
+// TaskStream provides streaming capabilities for processing input values through a worker [TaskPool].
 // It allows for continuous processing of inputs with buffering and automatic flushing.
 //
-// Stream processors are workers that expect a channel of type In as input, and will
+// TaskStream processors are workers that expect a channel of type In as input, and will
 // immediately return an output [Sink] when executed via [Start] or [StartWithID]. Use the
 // sink's output and error channels to retrieve the task results:
 //
@@ -296,33 +299,33 @@ func (p Pool[In, Out]) start(ctx context.Context,
 //			log.Fatal("Timeout waiting for results and errors")
 //		}
 //	}
-type Stream[In any, Out any] struct {
-	options Options       // Configuration options for the stream
-	pool    Pool[In, Out] // The underlying worker pool used for processing
+type TaskStream[In any, Out any] struct {
+	options Options           // Configuration options for the stream
+	pool    TaskPool[In, Out] // The underlying worker pool used for processing
 }
 
 // newStream creates a new Stream instance with the given pool and options.
 // The stream will use the pool for processing items in batches.
-func newStream[In any, Out any](pool Pool[In, Out], opts ...func(*Options)) Stream[In, Out] {
+func newStream[In any, Out any](pool TaskPool[In, Out], opts ...func(*Options)) TaskStream[In, Out] {
 	options := Options{}
 	options.apply(opts...)
 
-	return Stream[In, Out]{
+	return TaskStream[In, Out]{
 		options: options,
 		pool:    pool,
 	}
 }
 
-// NewStream creates a new [Stream] that processes items using the given [Doer].
+// NewStream creates a new [TaskStream] that processes items using the given [Doer].
 // The stream will automatically create a pool for concurrent processing.
-func NewStream[In any, Out any](t Task[In, Out], opts ...func(*Options)) *Stream[In, Out] {
+func NewStream[In any, Out any](t Task[In, Out], opts ...func(*Options)) TaskStream[In, Out] {
 	pool := NewPool(t, opts...)
 	return newStream(pool, opts...)
 }
 
 // execute processes items from the input channel using the configured pool.
 // Returns a [Sink] for accessing results and any error that occurred during setup.
-func (s Stream[In, Out]) execute(ctx context.Context, in chan In) (out Sink[Out], err error) {
+func (s TaskStream[In, Out]) execute(ctx context.Context, in chan In) (out Sink[Out], err error) {
 	sink := Sink[Out]{
 		outch: make(chan Out, s.options.bufferSize),
 		errch: make(chan error, s.options.bufferSize),
@@ -333,7 +336,7 @@ func (s Stream[In, Out]) execute(ctx context.Context, in chan In) (out Sink[Out]
 
 // collect accumulates items from the source channel into batches for processing.
 // Batches are processed when either the buffer is full or the flush timer expires.
-func (s Stream[In, Out]) collect(ctx context.Context, source <-chan In, sink *Sink[Out]) {
+func (s TaskStream[In, Out]) collect(ctx context.Context, source <-chan In, sink *Sink[Out]) {
 	jobs := make([]In, 0, s.options.bufferSize)
 	defer sink.close()
 	for {
@@ -354,7 +357,7 @@ func (s Stream[In, Out]) collect(ctx context.Context, source <-chan In, sink *Si
 
 // flush processes a batch of accumulated items using the worker pool.
 // Results and errors are sent to the appropriate sink channels.
-func (s Stream[In, Out]) flush(ctx context.Context, jobs []In, sink *Sink[Out]) []In {
+func (s TaskStream[In, Out]) flush(ctx context.Context, jobs []In, sink *Sink[Out]) []In {
 	if len(jobs) == 0 {
 		return nil
 	}
@@ -368,7 +371,7 @@ func (s Stream[In, Out]) flush(ctx context.Context, jobs []In, sink *Sink[Out]) 
 	return nil
 }
 
-// Sink handles the output stream from a [Stream] processor.
+// Sink handles the output stream from a [TaskStream] processor.
 // It provides separate channels for successful results and errors.
 type Sink[Out any] struct {
 	outch chan Out   // Channel for successful results
