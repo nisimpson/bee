@@ -2,8 +2,7 @@ package bee
 
 import (
 	"context"
-	"math"
-	"sync"
+	"sync/atomic"
 )
 
 // taskInfo contains identification information for a task.
@@ -32,9 +31,8 @@ func TaskID(ctx context.Context) string {
 
 // taskProgress tracks the progress of task execution.
 type taskProgress struct {
-	m     *sync.Mutex // m protects concurrent access to progress tracking
-	count float64     // count represents the number of completed tasks
-	total float64     // total represents the total number of tasks to process
+	count *atomic.Uint64 // count represents the number of completed tasks
+	total uint64         // total represents the total number of tasks to process
 }
 
 // progressctx is a context key type for storing task progress information.
@@ -57,27 +55,23 @@ func contextWithProgress(ctx context.Context, prog *taskProgress) context.Contex
 }
 
 // newTaskProgress creates a new progress tracker for the specified number of tasks.
-func newTaskProgress(total float64) *taskProgress {
+func newTaskProgress(total uint64) *taskProgress {
 	return &taskProgress{
-		m:     &sync.Mutex{},
-		count: 0,
 		total: total,
+		count: &atomic.Uint64{},
 	}
 }
 
 // increment advances the progress counter by one completed task.
 // This method is thread-safe.
 func (tc *taskProgress) increment() {
-	tc.m.Lock()
-	defer tc.m.Unlock()
-	tc.count++
+	tc.count.Add(1)
 }
 
 // progress calculates the current completion percentage.
 // Returns an integer between 0 and 100.
 func (tc taskProgress) progress() int {
-	tc.m.Lock()
-	defer tc.m.Unlock()
-	pct := (tc.count / tc.total) * 100
-	return int(math.Floor(pct))
+	count := tc.count.Load()
+	pct := (float64(count) / float64(tc.total)) * 100
+	return int(pct)
 }

@@ -131,7 +131,7 @@ func (p taskPool[I, O]) execute(ctx context.Context, in []I) ([]O, error) {
 		resultQ  = make(chan O, count)
 		errQ     = make(chan error, count)
 		wg       = sync.WaitGroup{}
-		progress = newTaskProgress(float64(count))
+		progress = newTaskProgress(uint64(count))
 		capacity = min(p.options.maxCapacity, count)
 	)
 
