@@ -4,10 +4,11 @@ import (
 	"time"
 )
 
-// Options combine retry and pool configuration options for a [Worker].
+// Options combine retry and pool configuration options for a [Task].
 type Options struct {
-	RetryOptions // RetryOptions configures the retry behavior for failed tasks
-	PoolOptions  // PoolOptions configures the worker pool behavior
+	RetryOptions  // RetryOptions configures the retry behavior for failed tasks
+	PoolOptions   // PoolOptions configures the worker pool behavior
+	StreamOptions // StreamOptions configures the stream behavior for the task stream.
 }
 
 // apply configures the Options struct using the provided option functions.
@@ -82,7 +83,7 @@ func (b exponentialBackoff) NextRetry(d time.Duration) time.Duration {
 
 // PoolOptions configures the behavior of a worker pool. Configuring the
 // maximum number of workers with a defined execution delay determines
-// the overall throughput of a [Pool]. For example:
+// the overall throughput of a [TaskPool]. For example:
 //
 //	5 workers * 1s delay = 5 executions per second
 type PoolOptions struct {
@@ -98,8 +99,8 @@ func WithPoolMaxWorkers(n int) func(*Options) {
 	return WithPoolMaxCapacity(n)
 }
 
-// WithPoolMaxWorkers configures the maximum number of concurrent [Worker]
-// instances in a [Pool]. This controls the level of parallelism when processing tasks.
+// WithPoolMaxWorkers configures the maximum number of concurrent [Task]
+// instances in a [TaskPool]. This controls the level of parallelism when processing tasks.
 // A pool with max capacity M and task count N will generate min(N, M) workers.
 // A max capacity of zero or less will generate N workers.
 func WithPoolMaxCapacity(n int) func(*Options) {
@@ -121,5 +122,27 @@ func WithPoolWorkerDelay(d time.Duration) func(*Options) {
 func WithPoolWorkerIdleDuration(d time.Duration) func(*Options) {
 	return func(o *Options) {
 		o.workerIdleDuration = d
+	}
+}
+
+type StreamOptions struct {
+	bufferSize int           // bufferSize is the size of the buffer used to store tasks before processing.
+	flushEvery time.Duration // flushEvery is the duration after which the stream will be flushed if not empty.
+}
+
+// WithStreamBufferSize configures the buffer size for stream processing.
+// The buffer size determines the maximum number of results sent to the sink channel
+// before blocking the processor.
+func WithStreamBufferSize(n int) func(*Options) {
+	return func(o *Options) {
+		o.bufferSize = n
+	}
+}
+
+// WithStreamFlushEvery sets the duration after which buffered items will be automatically processed.
+// A zero duration will cause the buffer to flush immediately.
+func WithStreamFlushEvery(d time.Duration) func(*Options) {
+	return func(o *Options) {
+		o.flushEvery = d
 	}
 }

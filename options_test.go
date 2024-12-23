@@ -14,13 +14,9 @@ func TestWithRetryMaxAttempts(t *testing.T) {
 		option(opts)
 
 		// Test implementation details through behavior in NewWorker
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryMaxAttempts(maxAttempts))
-
-		if worker == nil {
-			t.Error("Expected non-nil worker")
-		}
 	})
 
 	t.Run("zero attempts", func(t *testing.T) {
@@ -28,13 +24,9 @@ func TestWithRetryMaxAttempts(t *testing.T) {
 		option := WithRetryMaxAttempts(0)
 		option(opts)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryMaxAttempts(0))
-
-		if worker == nil {
-			t.Error("Expected non-nil worker")
-		}
 	})
 
 	t.Run("negative attempts", func(t *testing.T) {
@@ -42,13 +34,9 @@ func TestWithRetryMaxAttempts(t *testing.T) {
 		option := WithRetryMaxAttempts(-1)
 		option(opts)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryMaxAttempts(-1))
-
-		if worker == nil {
-			t.Error("Expected non-nil worker")
-		}
 	})
 }
 
@@ -59,13 +47,9 @@ func TestWithRetryEvery(t *testing.T) {
 		option := WithRetryEvery(duration)
 		option(opts)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryEvery(duration))
-
-		if worker == nil {
-			t.Error("Expected non-nil worker")
-		}
 	})
 
 	t.Run("zero duration", func(t *testing.T) {
@@ -73,13 +57,9 @@ func TestWithRetryEvery(t *testing.T) {
 		option := WithRetryEvery(0)
 		option(opts)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryEvery(0))
-
-		if worker == nil {
-			t.Error("Expected non-nil worker")
-		}
 	})
 
 	t.Run("negative duration", func(t *testing.T) {
@@ -87,13 +67,9 @@ func TestWithRetryEvery(t *testing.T) {
 		option := WithRetryEvery(-time.Second)
 		option(opts)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), WithRetryEvery(-time.Second))
-
-		if worker == nil {
-			t.Error("Expected non-nil worker")
-		}
 	})
 }
 
@@ -103,13 +79,9 @@ func TestWithRetryExponentially(t *testing.T) {
 		max := time.Minute
 		option := WithRetryExponentially(start, max)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), option)
-
-		if worker == nil {
-			t.Error("Expected non-nil worker")
-		}
 	})
 
 	t.Run("max less than start", func(t *testing.T) {
@@ -117,13 +89,9 @@ func TestWithRetryExponentially(t *testing.T) {
 		max := time.Second
 		option := WithRetryExponentially(start, max)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}), option)
-
-		if worker == nil {
-			t.Error("Expected non-nil worker")
-		}
 	})
 }
 
@@ -134,14 +102,10 @@ func TestWithPoolMaxWorkers(t *testing.T) {
 		option := WithPoolMaxWorkers(numWorkers)
 		option(opts)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		worker := Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}))
-		pool := worker.Pool(WithPoolMaxWorkers(numWorkers))
-
-		if pool == nil {
-			t.Error("Expected non-nil pool")
-		}
+		Pool(worker, WithPoolMaxWorkers(numWorkers))
 	})
 
 	t.Run("zero workers", func(t *testing.T) {
@@ -149,14 +113,10 @@ func TestWithPoolMaxWorkers(t *testing.T) {
 		option := WithPoolMaxWorkers(0)
 		option(opts)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		worker := Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}))
-		pool := worker.Pool(WithPoolMaxWorkers(0))
-
-		if pool == nil {
-			t.Error("Expected non-nil pool")
-		}
+		Pool(worker, WithPoolMaxWorkers(0))
 	})
 }
 
@@ -167,14 +127,10 @@ func TestWithPoolWorkerDelay(t *testing.T) {
 		option := WithPoolWorkerDelay(delay)
 		option(opts)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		worker := Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}))
-		pool := worker.Pool(WithPoolWorkerDelay(delay))
-
-		if pool == nil {
-			t.Error("Expected non-nil pool")
-		}
+		Pool(worker, WithPoolWorkerDelay(delay))
 	})
 
 	t.Run("zero delay", func(t *testing.T) {
@@ -182,14 +138,10 @@ func TestWithPoolWorkerDelay(t *testing.T) {
 		option := WithPoolWorkerDelay(0)
 		option(opts)
 
-		worker := NewWorker(NewTask(func(ctx context.Context, i int) (int, error) {
+		worker := Retry(New(func(ctx context.Context, i int) (int, error) {
 			return i, nil
 		}))
-		pool := worker.Pool(WithPoolWorkerDelay(0))
-
-		if pool == nil {
-			t.Error("Expected non-nil pool")
-		}
+		Pool(worker, WithPoolWorkerDelay(0))
 	})
 }
 

@@ -29,12 +29,12 @@ import (
 // Define a task that processes a string and returns its length
 func main() {
     // Create a task function
-    task := bee.NewTask(func(ctx context.Context, input string) (int, error) {
+    task := bee.New(func(ctx context.Context, input string) (int, error) {
         return len(input), nil
     })
 
     // Create a worker with retry options
-    worker := bee.NewWorker(task,
+    worker := bee.Retry(task,
         bee.WithRetryMaxAttempts(3),
         bee.WithRetryEvery(time.Second),
     )
@@ -62,35 +62,28 @@ import (
 
 func main() {
     // Create a task that processes numbers
-    task := bee.NewTask(func(ctx context.Context, n int) (int, error) {
+    task := bee.New(func(ctx context.Context, n int) (int, error) {
         // Simulate work
         time.Sleep(time.Second)
 
         // Report progress
         fmt.Printf("worker %s progress: %d%%",
-          bee.WorkerInfo(ctx).WorkerID,
-          bee.TaskProgress(ctx),
+            bee.TaskID(ctx),
+            bee.TaskProgress(ctx),
         )
 
         return n * 2, nil
     })
 
-    // Create a worker with retry and pool options
-    worker := bee.NewWorker(task,
+    // Wrap task with retry options
+    retry := bee.Retry(task,
         bee.WithRetryMaxAttempts(3),
         bee.WithRetryExponentially(time.Second, time.Second*10),
     )
 
     // Create a pool with 5 workers
-    pool := worker.Pool(
-        bee.WithPoolMaxCapacity(5),
-        bee.WithPoolWorkerIdleDuration(time.Millisecond*100),
-    )
-
-    // Or, combine both steps with NewPool:
-    pool = bee.NewPool(task,
-        bee.WithRetryMaxAttempts(3),
-        bee.WithRetryExponentially(time.Second, time.Second*10),
+    pool := bee.Pool(
+        retry,
         bee.WithPoolMaxCapacity(5),
         bee.WithPoolWorkerIdleDuration(time.Millisecond*100),
     )
@@ -106,11 +99,75 @@ func main() {
 }
 ```
 
+### Stream Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "time"
+    "github.com/nisimpson/bee"
+)
+
+func main() {
+    // Create a task that processes items from a channel
+    task := bee.New(func(ctx context.Context, i int) (string, error) {
+        // Simulate some work
+        time.Sleep(100 * time.Millisecond)
+        return fmt.Sprintf("processed-%d", i), nil
+    })
+
+    // Create a pool with 5 workers
+    pool := bee.Pool(
+        task,
+        bee.WithPoolMaxCapacity(5),
+        bee.WithPoolWorkerIdleDuration(time.Millisecond*100),
+    )
+
+    // Create a stream with buffer size and auto flush
+    stream := bee.Stream(
+        pool,
+        bee.WithStreamBufferSize(10),
+        bee.WithStreamFlushEvery(10 * time.Millisecond),
+    )
+
+    // Create an input channel
+    input := make(chan int)
+    go func() {
+        // Send some items to process
+        for i := 1; i <= 5; i++ {
+            input <- i
+        }
+        close(input)
+    }()
+
+    // Process items from the channel
+    ctx := context.Background()
+    sink, err := bee.Start(ctx, stream, input)
+    if err != nil {
+        panic(err)
+    }
+
+    // Read results as they become available
+    for result := range sink.Out() {
+        fmt.Println(result)
+    }
+
+    // Check for any errors
+    for err := range sink.Err() {
+        fmt.Printf("Error: %v\n", err)
+    }
+}
+```
+
 ## Features
 
 - Type-safe task definitions using generics
 - Configurable retry behavior with different backoff strategies
 - Worker pool with concurrent task processing
+- Pool stream for continuous procesing of inputs with buffering and automatic flushing
 - Progress tracking through context
 - Flexible options for both retry and pool configurations
 

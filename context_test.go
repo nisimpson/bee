@@ -9,23 +9,20 @@ func TestWorkerInfo(t *testing.T) {
 	// Test case 1: Test with context containing worker info
 	t.Run("context with worker info", func(t *testing.T) {
 		ctx := context.Background()
-		expectedInfo := workerInfo{
-			WorkerID: "test-worker",
-		}
-		ctx = contextWithWorkerInfo(ctx, expectedInfo)
+		ctx = ContextWithTaskID(ctx, "test-worker")
 
-		gotInfo := WorkerInfo(ctx)
-		if gotInfo != expectedInfo {
-			t.Errorf("WorkerInfo() = %v, want %v", gotInfo, expectedInfo)
+		gotInfo := TaskID(ctx)
+		if gotInfo != "test-worker" {
+			t.Errorf("WorkerInfo() = %v, want %v", gotInfo, "test-worker")
 		}
 	})
 
 	// Test case 2: Test with empty context
 	t.Run("empty context", func(t *testing.T) {
 		ctx := context.Background()
-		info := WorkerInfo(ctx)
-		if info.WorkerID != "" {
-			t.Errorf("Expected empty worker info, got ID = %s", info.WorkerID)
+		info := TaskID(ctx)
+		if info != "" {
+			t.Errorf("Expected empty worker info, got ID = %s", info)
 		}
 	})
 }
