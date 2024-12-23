@@ -6,28 +6,28 @@ import (
 	"sync"
 )
 
-// workerInfo contains identification information for a worker.
-type workerInfo struct {
-	// WorkerID is the unique identifier for the worker
-	WorkerID string
+// taskInfo contains identification information for a task.
+type taskInfo struct {
+	// TaskID is the unique identifier for the task
+	TaskID string
 }
 
-// workerctx is a context key type for storing worker information.
-type workerctx struct{}
+// taskctx is a context key type for storing task information.
+type taskctx struct{}
 
-// contextWithWorkerInfo adds worker identification information to the context.
-func contextWithWorkerInfo(ctx context.Context, info workerInfo) context.Context {
-	return context.WithValue(ctx, workerctx{}, info)
+// ContextWithTaskID adds worker identification information to the context.
+func ContextWithTaskID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, taskctx{}, taskInfo{TaskID: id})
 }
 
-// WorkerInfo retrieves the worker identification information from the context.
+// TaskID retrieves the worker identification information from the context.
 // This allows tasks to know which worker is executing them.
-func WorkerInfo(ctx context.Context) workerInfo {
-	workctx := ctx.Value(workerctx{})
-	if workctx == nil {
-		return workerInfo{}
+func TaskID(ctx context.Context) string {
+	t := ctx.Value(taskctx{})
+	if t == nil {
+		return ""
 	}
-	return workctx.(workerInfo)
+	return t.(taskInfo).TaskID
 }
 
 // taskProgress tracks the progress of task execution.
