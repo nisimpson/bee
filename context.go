@@ -1,77 +1,85 @@
+// Package bee provides a flexible and type-safe worker pool implementation with retry capabilities.
 package bee
 
 import (
 	"context"
-	"sync/atomic"
+	"sync"
 )
 
-// taskInfo contains identification information for a task.
-type taskInfo struct {
-	// TaskID is the unique identifier for the task
-	TaskID string
+// taskContext tracks progress information for a task or group of tasks.
+type taskContext struct {
+	mu      sync.RWMutex
+	total   int // Total number of tasks to process
+	current int // Number of tasks completed so far
 }
 
-// taskctx is a context key type for storing task information.
-type taskctx struct{}
-
-// ContextWithTaskID adds worker identification information to the context.
-func ContextWithTaskID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, taskctx{}, taskInfo{TaskID: id})
+// init initializes the task context with the total number of tasks to process.
+func (c *taskContext) init(total int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.current = 0
+	c.total = total
 }
 
-// TaskID retrieves the worker identification information from the context.
-// This allows tasks to know which worker is executing them.
-func TaskID(ctx context.Context) string {
-	t := ctx.Value(taskctx{})
-	if t == nil {
-		return ""
+// increment increases the count of completed tasks by one.
+// If the current count exceeds the total, the total is updated to match.
+func (c *taskContext) increment() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.current++
+	if c.current > c.total {
+		c.total = c.current
 	}
-	return t.(taskInfo).TaskID
 }
 
-// taskProgress tracks the progress of task execution.
-type taskProgress struct {
-	count *atomic.Uint64 // count represents the number of completed tasks
-	total uint64         // total represents the total number of tasks to process
-}
-
-// progressctx is a context key type for storing task progress information.
-type progressctx struct{}
-
-// TaskProgress retrieves the current progress percentage from the context.
-// Returns an integer between 0 and 100 representing the completion percentage.
-func TaskProgress(ctx context.Context) int {
-	prog := ctx.Value(progressctx{})
-	if prog == nil {
+// Progress calculates the percentage of tasks completed, from 0 to 100.
+func (c *taskContext) Progress() float64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.total == 0 {
 		return 0
 	}
-	return prog.(*taskProgress).progress()
+	return float64(c.current) / float64(c.total) * 100
 }
 
-// contextWithProgress adds progress tracking capability to the context.
-// This allows tracking progress across multiple goroutines in a worker pool.
-func contextWithProgress(ctx context.Context, prog *taskProgress) context.Context {
-	return context.WithValue(ctx, progressctx{}, prog)
+// contextKey is a unique key type for storing task context in a context.Context.
+type contextKey struct{}
+
+// setContext adds a taskContext to a context.Context and returns the new context.
+func setContext(ctx context.Context, c *taskContext) context.Context {
+	return context.WithValue(ctx, contextKey{}, c)
 }
 
-// newTaskProgress creates a new progress tracker for the specified number of tasks.
-func newTaskProgress(total uint64) *taskProgress {
-	return &taskProgress{
-		total: total,
-		count: &atomic.Uint64{},
+// getContext retrieves the taskContext from a context.Context if it exists.
+// Returns the taskContext and a boolean indicating whether it was found.
+func getContext(parent context.Context) (*taskContext, bool) {
+	c, ok := parent.Value(contextKey{}).(*taskContext)
+	return c, ok
+}
+
+// Progress returns the current progress percentage of tasks in the given context.
+// If no task context is found, returns 0.
+func Progress(ctx context.Context) float64 {
+	if c, ok := getContext(ctx); ok {
+		return c.Progress()
 	}
+	return 0
 }
 
-// increment advances the progress counter by one completed task.
-// This method is thread-safe.
-func (tc *taskProgress) increment() {
-	tc.count.Add(1)
+// workerIDContextKey is a unique key type for storing worker IDs in a context.Context.
+type workerIDContextKey struct{}
+
+// setWorkerID adds a worker ID to a context.Context and returns the new context.
+func setWorkerID(ctx context.Context, id int) context.Context {
+	return context.WithValue(ctx, workerIDContextKey{}, id)
 }
 
-// progress calculates the current completion percentage.
-// Returns an integer between 0 and 100.
-func (tc taskProgress) progress() int {
-	count := tc.count.Load()
-	pct := (float64(count) / float64(tc.total)) * 100
-	return int(pct)
+// WorkerID retrieves the worker ID from a context.Context if it exists.
+// Returns the worker ID or -1 if no worker ID is found.
+func WorkerID(ctx context.Context) int {
+	c, ok := ctx.Value(workerIDContextKey{}).(int)
+	if !ok {
+		return -1
+	}
+	return c
 }
