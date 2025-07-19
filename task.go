@@ -1,337 +1,287 @@
+// Package bee provides a flexible and type-safe worker pool implementation with retry capabilities.
 package bee
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 )
 
-// Task is a procedure intended to perform a user-defined unit of work. Tasks
-// can be executed via the [Start] or [StartWithID] functions.
-type Task[I any, O any] interface {
-	execute(context.Context, I) (O, error)
+var (
+	// ErrMaxAttempts is returned when a [Task] has been retried the maximum number of times without success.
+	ErrMaxAttempts = errors.New("maximum attempts reached")
+)
+
+// Task is a generic interface that represents a unit of work that takes an input of type In
+// and produces an output of type Out or an error of type Err.
+type Task[In, Out, Err any] interface {
+	execute(ctx context.Context, in In) (Out, Err)
 }
 
-// Start executes the [Task] with the provided input.
-func Start[In any, Out any](ctx context.Context, w Task[In, Out], in In) (Out, error) {
-	return w.execute(ctx, in)
+// Execute runs a [Task] with the given context and input, returning the output and any error.
+// This is the primary entry point for executing individual tasks.
+func Execute[In, Out, Err any](ctx context.Context, task Task[In, Out, Err], in In) (Out, Err) {
+	if _, ok := getContext(ctx); !ok {
+		ctx = setContext(ctx, &taskContext{})
+	}
+	return task.execute(ctx, in)
 }
 
-// TaskFunc is a function that implements [Task]. It also provides transformation methods
-// to extend functionality.
-type TaskFunc[I any, O any] func(context.Context, I) (O, error)
+// taskFunc is a function type that implements the Task interface.
+type taskFunc[In, Out, Err any] func(ctx context.Context, in In) (Out, Err)
 
-// New provides a convenient way to create a [Task] from a simple function that matches
-// the required signature.
-func New[I any, O any](f func(context.Context, I) (O, error)) Task[I, O] {
-	return TaskFunc[I, O](f)
+// execute implements the Task interface for taskFunc.
+func (tf taskFunc[In, Out, Err]) execute(ctx context.Context, in In) (Out, Err) {
+	return tf(ctx, in)
 }
 
-// execute executes the task.
-func (f TaskFunc[I, O]) execute(ctx context.Context, in I) (O, error) {
-	return f(ctx, in)
+// NewTask creates a new [Task] from a function that processes input of type In and returns
+// output of type Out and an error.
+func NewTask[In, Out any](fn func(ctx context.Context, in In) (Out, error)) Task[In, Out, error] {
+	return taskFunc[In, Out, error](fn)
 }
 
-// Compose bundles two tasks {t, next}s, where t(T) = U and next(U) = V, and returns
-// a new [Task] t2 where t2(T) = V.
-func Compose[T any, U any, V any](t Task[T, U], next Task[U, V]) TaskFunc[T, V] {
-	return func(ctx context.Context, in T) (V, error) {
+// Compose creates a new task that chains multiple tasks together sequentially.
+// It takes an initial task and a variadic number of additional tasks, where
+// each task processes the same type T. The output of each task becomes
+// the input to the next task in the sequence.
+//
+// Returns a single [Task] that processes all tasks in order.
+func Compose[T any](task Task[T, T, error], tasks ...Task[T, T, error]) Task[T, T, error] {
+	t := task
+	for _, tt := range tasks {
+		t = Compose2(t, tt)
+	}
+	return t
+}
+
+// Compose2 creates a new [Task] that chains two tasks together, where the output of the first task
+// becomes the input to the second task.
+func Compose2[T, U, V any](left Task[T, U, error], right Task[U, V, error]) Task[T, V, error] {
+	return taskFunc[T, V, error](func(ctx context.Context, t T) (V, error) {
 		var (
 			u   U
 			v   V
 			err error
 		)
-		u, err = t.execute(ctx, in)
+		u, err = Execute(ctx, left, t)
 		if err != nil {
 			return v, err
 		}
-		return next.execute(ctx, u)
+		v, err = Execute(ctx, right, u)
+		return v, err
+	})
+}
+
+// retryTask is a Task implementation that adds retry capabilities to an underlying task.
+type retryTask[In, Out any] struct {
+	Task[In, Out, error]         // The underlying task to execute
+	options              Options // Configuration options for the worker
+}
+
+// Retry creates a [Task] that wraps an underlying task with retry capabilities.
+// RetryTask will retry the task according to the provided options.
+func Retry[In, Out any](task Task[In, Out, error], opts ...func(*Options)) Task[In, Out, error] {
+	options := defaultOptions()
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	return retryTask[In, Out]{
+		Task:    task,
+		options: options,
 	}
 }
 
-// RetryBackoff defines the interface for implementing retry backoff strategies.
-type RetryBackoff interface {
-	// NextRetry calculates the duration to wait before the next retry attempt
-	// based on the previous retry duration.
-	NextRetry(prev time.Duration) time.Duration
-}
-
-type retryTask[I any, O any] struct {
-	t       Task[I, O]
-	options RetryOptions
-}
-
-// Retry creates a new [Task] that will be execute with retry behavior based on the configuration.
-// [RetryOptions] can be provided to customize retry attempts and [RetryBackoff] strategy.
-//
-// By default, retry will only perform one attempt to execute the task.
-func Retry[I any, O any](t Task[I, O], opts ...func(*Options)) Task[I, O] {
-	o := Options{
-		RetryOptions: RetryOptions{
-			maxAttempts:  1,
-			retryBackoff: constantBackoff(0),
-		},
-	}
-	o.apply(opts...)
-	return retryTask[I, O]{t: t, options: o.RetryOptions}
-}
-
-// execute implements the [Task] interface by running the underlying task with retry logic.
-// It will retry failed attempts according to the configured RetryOptions.
-func (r retryTask[I, O]) execute(ctx context.Context, in I) (O, error) {
+// execute implements the Task interface for worker, adding retry logic to the underlying task.
+func (w retryTask[In, Out]) execute(ctx context.Context, in In) (out Out, err error) {
 	var (
-		out     O
-		err     error
-		backoff = r.options.retryBackoff
-		delay   = backoff.NextRetry(0)
+		attempt int
+		delay   time.Duration
 	)
 
-	for i := 0; i < r.options.maxAttempts; i++ {
-		out, err = r.t.execute(ctx, in)
+	for attempt < w.options.attempts {
+		out, err = w.Task.execute(ctx, in)
 		if err == nil {
 			return out, nil
 		}
-		select {
-		// worker is cancelled; return immediately
-		case <-ctx.Done():
-			return out, ctx.Err()
-		// wait for next retry; compute new delay duration
-		case <-time.After(delay):
-			delay = backoff.NextRetry(delay)
-		}
+		delay = w.options.retryer.NextRetry(delay)
+		time.Sleep(delay)
+		attempt++
 	}
 
-	// worker failed, return error
-	return out, err
+	return out, fmt.Errorf("%w: %w", ErrMaxAttempts, err)
 }
 
-// taskPool represents a worker pool that can execute multiple tasks concurrently.
-type taskPool[I any, O any] struct {
-	Task[I, O]
-	options PoolOptions
+// stream is a [Task] implementation that processes inputs concurrently using a worker pool.
+type stream[In, Out any] struct {
+	Task[In, Out, error]         // The task to execute for each input
+	options              Options // Configuration options for the stream
 }
 
-// Pool creates a [Task] pool with the specified worker and options.
-// The pool uses goroutines to process multiple jobs concurrently.
-func Pool[I any, O any](t Task[I, O], opts ...func(*Options)) Task[[]I, []O] {
-	o := Options{}
-	o.apply(opts...)
-	return taskPool[I, O]{Task: t, options: o.PoolOptions}
-}
+// TaskStream is a type alias for a [Task] that processes a channel of inputs and produces a channel of outputs.
+type TaskStream[In, Out any] = Task[<-chan In, chan Out, <-chan error]
 
-// execute processes a batch of inputs concurrently using the pool of workers.
-// It returns the outputs in the same order as the inputs, or an error if the execution fails.
-func (p taskPool[I, O]) execute(ctx context.Context, in []I) ([]O, error) {
-	var (
-		count    = len(in)
-		queue    = make(chan I, count)
-		resultQ  = make(chan O, count)
-		errQ     = make(chan error, count)
-		wg       = sync.WaitGroup{}
-		progress = newTaskProgress(uint64(count))
-		capacity = min(p.options.maxCapacity, count)
-	)
-
-	// if user does not specify capacity, assume creation of as many workers
-	// as there are jobs.
-	if capacity < 1 {
-		capacity = count
+// Pipe connects multiple task streams of the same type in sequence. It takes an initial stream and
+// a variadic number of additional streams, connecting them together using [Pipe2]. The output of each
+// stream becomes the input to the next stream in the sequence. Returns a single [TaskStream] that
+// processes all streams in order.
+func Pipe[U any](stream TaskStream[U, U], streams ...TaskStream[U, U]) TaskStream[U, U] {
+	pipe := stream
+	for _, s := range streams {
+		pipe = Pipe2(pipe, s)
 	}
-
-	prefix := TaskID(ctx)
-
-	for i := 0; i < capacity; i++ {
-		wg.Add(1)
-		go func(workerID int, wg *sync.WaitGroup) {
-			defer wg.Done()
-			p.start(
-				ctx,
-				workerID,
-				prefix,
-				queue, resultQ, errQ,
-				p.Task,
-				progress,
-			)
-		}(i, &wg)
-	}
-
-	// enqueue work
-	for _, in := range in {
-		queue <- in
-	}
-
-	// close queue to signal workers to stop
-	close(queue)
-
-	// wait for workers to finish
-	wg.Wait()
-	close(resultQ)
-	close(errQ)
-
-	// collect results
-	var (
-		results = make([]O, 0, count)
-		errs    = make([]error, 0, count)
-	)
-
-	for result := range resultQ {
-		results = append(results, result)
-	}
-
-	for err := range errQ {
-		errs = append(errs, err)
-	}
-
-	return results, errors.Join(errs...)
+	return pipe
 }
 
-// start launches worker goroutines to process tasks from the input queue.
-// It manages the worker lifecycle and coordinates task execution.
-func (p taskPool[I, O]) start(ctx context.Context,
-	idx int,
-	prefix string,
-	jobs <-chan I,
-	results chan<- O,
-	errs chan<- error,
-	worker Task[I, O],
-	progress *taskProgress,
-) {
-	workerID := fmt.Sprintf("%s#%s", prefix, strconv.Itoa(idx))
-	ctx = contextWithProgress(ctx, progress)
-	ctx = ContextWithTaskID(ctx, workerID)
-
-	for job := range jobs {
-		select {
-		case <-ctx.Done():
-			errs <- ctx.Err()
-			return
-		default:
-			out, err := Start(ctx, worker, job)
-			progress.increment()
-			time.Sleep(p.options.workerIdleDuration)
-			results <- out
-			errs <- err
-		}
-	}
+// Pipe2 connects two streams together, where the output channel of the first [TaskStream]
+// becomes the input channel to the second.
+func Pipe2[T, U, V any](left TaskStream[T, U], right TaskStream[U, V]) TaskStream[T, V] {
+	return taskFunc[<-chan T, chan V, <-chan error](func(ctx context.Context, in <-chan T) (chan V, <-chan error) {
+		var (
+			u, uerr = Execute(ctx, left, in)
+			v, verr = Execute(ctx, right, u)
+		)
+		return v, mergeErrorChannel(ctx, uerr, verr)
+	})
 }
 
-type taskStream[I any, O any] struct {
-	Task[[]I, []O]
-	options StreamOptions
-}
+// mergeErrorChannel combines multiple error channels into a single error channel.
+// It takes a context and a variadic number of input error channels as parameters.
+// When all input channels are closed and processed, it closes the output channel.
+// The context allows for cancellation of the merging operation.
+func mergeErrorChannel(ctx context.Context, cs ...<-chan error) <-chan error {
+	out := make(chan error)
+	var wg sync.WaitGroup
 
-// Stream provides streaming capabilities for processing input values through a [Task] pool.
-// It allows for continuous processing of inputs with buffering and automatic flushing.
-//
-// Stream processors are workers that expect a channel of type In as input, and will
-// immediately return an output [Sink] when executed via [Start] or [StartWithID]. Use the
-// sink's output and error channels to retrieve the task results:
-//
-//	input := make(chan int)
-//	sink, _ := bee.Start(ctx, stream, input)
-//	results := make([]int, 0)
-//	errs := make([]error, 0)
-//
-//	go func() {
-//		input <- 1
-//		close(input)
-//	}()
-//
-//	for done := false; !done; {
-//		select {
-//		case <-ctx.Done():
-//			done = true
-//		case result, next := <-sink.Chan():
-//			if !next {
-//				done = true
-//			} else {
-//				results = append(results, result)
-//			}
-//		case err := <-sink.Err():
-//			errs = append(errs, err)
-//		case <-time.After(timeoutDuration):
-//			log.Fatal("Timeout waiting for results and errors")
-//		}
-//	}
-func Stream[I any, O any](t Task[[]I, []O], opts ...func(*Options)) Task[chan I, Sink[O]] {
-	o := Options{}
-	o.apply(opts...)
-	return taskStream[I, O]{Task: t, options: o.StreamOptions}
-}
-
-// execute processes items from the input channel using the configured pool.
-// Returns a [Sink] for accessing results and any error that occurred during setup.
-func (s taskStream[I, O]) execute(ctx context.Context, in chan I) (out Sink[O], err error) {
-	sink := Sink[O]{
-		outch: make(chan O, s.options.bufferSize),
-		errch: make(chan error, s.options.bufferSize),
-	}
-	go s.collect(ctx, in, &sink)
-	return sink, nil
-}
-
-// collect accumulates items from the source channel into batches for processing.
-// Batches are processed when either the buffer is full or the flush timer expires.
-func (s taskStream[I, O]) collect(ctx context.Context, source <-chan I, sink *Sink[O]) {
-	jobs := make([]I, 0, s.options.bufferSize)
-	defer sink.close()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case job, next := <-source:
-			if !next {
-				s.flush(ctx, jobs, sink)
+	merge := func(ctx context.Context, wg *sync.WaitGroup, in <-chan error, out chan<- error) {
+		defer wg.Done()
+		for {
+			select {
+			case err, ok := <-in:
+				if !ok {
+					return
+				}
+				select {
+				case out <- err:
+				case <-ctx.Done():
+					return
+				}
+			case <-ctx.Done():
 				return
 			}
-			jobs = append(jobs, job)
-		case <-time.After(s.options.flushEvery):
-			jobs = s.flush(ctx, jobs, sink)
 		}
 	}
-}
 
-// flush processes a batch of accumulated items using the worker pool.
-// Results and errors are sent to the appropriate sink channels.
-func (s taskStream[I, O]) flush(ctx context.Context, jobs []I, sink *Sink[O]) []I {
-	if len(jobs) == 0 {
-		return nil
+	for _, c := range cs {
+		wg.Add(1)
+		go merge(ctx, &wg, c, out)
 	}
 
-	results, err := s.Task.execute(ctx, jobs)
-	sink.errch <- err
-	for _, result := range results {
-		sink.outch <- result
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+
+	return out
+}
+
+// Stream creates a new [TaskStream] that processes inputs concurrently using a worker pool.
+// The stream will execute the given task for each input using multiple workers.
+func Stream[In any, Out any](task Task[In, Out, error], opts ...func(*Options)) Task[<-chan In, chan Out, <-chan error] {
+	options := defaultOptions()
+
+	for _, opt := range opts {
+		opt(&options)
 	}
 
-	return nil
+	return stream[In, Out]{
+		Task:    task,
+		options: options,
+	}
 }
 
-// Sink handles the output stream from a [TaskStream] processor.
-// It provides separate channels for successful results and errors.
-type Sink[O any] struct {
-	outch chan O     // Channel for successful results
-	errch chan error // Channel for errors encountered during processing
+// execute implements the Task interface for stream, processing inputs concurrently using multiple workers.
+func (s stream[In, Out]) execute(ctx context.Context, in <-chan In) (chan Out, <-chan error) {
+	var (
+		size       = max(len(in), s.options.capacity)
+		out        = make(chan Out, size)
+		errCh      = make(chan error, size)
+		taskctx, _ = getContext(ctx)
+		wg         = &sync.WaitGroup{}
+	)
+
+	taskctx.init(len(in))
+
+	for i := 0; i < s.options.workers; i++ {
+		wg.Add(1)
+		go func(workerctx context.Context) {
+			defer wg.Done()
+			for v := range in {
+				if workerctx.Err() != nil {
+					return
+				}
+				o, e := s.Task.execute(workerctx, v)
+				taskctx.increment()
+				if e != nil {
+					errCh <- fmt.Errorf("task error: %w", e)
+					continue
+				}
+				out <- o
+			}
+		}(setWorkerID(ctx, i))
+	}
+
+	go func() {
+		wg.Wait()    // wait for workers to complete
+		close(out)   // close output channel
+		close(errCh) // close the error channel so stream error can consume
+	}()
+
+	return out, errCh
 }
 
-// Out returns a channel that provides access to successful task results.
-// The channel is closed when processing is complete.
-func (s Sink[O]) Out() <-chan O {
-	return s.outch
+// Retryer defines an interface for determining the delay between retry attempts.
+type Retryer interface {
+	// NextRetry calculates the next retry delay based on the previous delay.
+	NextRetry(prev time.Duration) time.Duration
 }
 
-// Err returns a channel that provides access to errors encountered during processing.
-// The channel is closed when processing is complete.
-func (s Sink[O]) Err() <-chan error {
-	return s.errch
+// retryLinear implements a constant backoff retry strategy.
+type retryLinear struct {
+	period time.Duration // Fixed time period between retries
 }
 
-// close closes both the output and error channels of the [Sink].
-// This should be called when the Sink is no longer needed.
-func (s Sink[O]) close() {
-	close(s.outch)
-	close(s.errch)
+// NextRetry returns a constant delay for each retry attempt.
+func (r retryLinear) NextRetry(prev time.Duration) time.Duration { return r.period }
+
+// RetryLinear creates a [Retryer] that uses a constant delay between retry attempts.
+func RetryLinear(period time.Duration) Retryer {
+	return retryLinear{period: period}
+}
+
+// retryExponential implements an exponential backoff retry strategy.
+type retryExponential struct {
+	period time.Duration // Initial delay period
+	max    time.Duration // Maximum delay period
+}
+
+// NextRetry doubles the previous delay for each retry attempt, up to a maximum value.
+func (r retryExponential) NextRetry(prev time.Duration) time.Duration {
+	if prev == 0 {
+		return r.period
+	}
+	if prev >= r.max {
+		return r.max
+	}
+	return prev * 2
+}
+
+// RetryExponential creates a [Retryer] that uses exponential backoff between retry attempts.
+// The delay starts at the given period and doubles with each attempt, up to the maximum value.
+func RetryExponential(period, max time.Duration) Retryer {
+	period = min(period, max)
+	return retryExponential{period: period, max: max}
 }

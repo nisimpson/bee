@@ -6,7 +6,7 @@ on:
     types: [completed]
 
 env:
-  PACKAGE_NAME: github.com/nisimpson/bee
+  PACKAGE_NAME: github.com/nisimpson/bee/v2
 
 jobs:
   on-success:
@@ -27,10 +27,11 @@ jobs:
           tag: ${{ steps.semver.outputs.new_tag }}
           name: Release ${{ steps.semver.outputs.new_tag }}
           body: ${{ steps.semver.outputs.changelog }}
+          generateReleaseNotes: true
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.23.x
+          go-version: 1.24.x
       - name: Checkout
         uses: actions/checkout@v4
       - name: Publish Module
